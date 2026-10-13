@@ -41,6 +41,8 @@ with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
         write_file(archive, file, prefix + file.name)
     for file in sorted((root / "wheels").glob("*.whl")):
         write_file(archive, file, prefix + "wheels/" + file.name)
+    for file in sorted((root / "rimvision/models").glob("*.xml")):
+        write_file(archive, file, prefix + "models/" + file.name)
     for name in ("README.md", "THIRD_PARTY.md", "LICENSE"):
         write_file(archive, root / name, prefix + name)
     if args.extension:

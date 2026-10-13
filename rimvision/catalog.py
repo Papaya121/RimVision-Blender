@@ -244,8 +244,10 @@ def scan(game, workshop=None, version="1.6", cached=None, config=None, active_on
             builtin, locked = "", False
             if record["door"]:
                 builtin, locked = "Дверь", True
-            elif record["defName"] in ("Vent", "TorchWallLamp"):
-                builtin, locked = "Вентиляция" if record["defName"] == "Vent" else "Настенный факел", True
+            elif record["defName"] == "Vent":
+                builtin, locked = "Вентиляция", True
+            elif record["defName"] == "TorchWallLamp":
+                builtin = "Настенный факел"
             elif text(resolved, "building/isNaturalRock").lower() == "true":
                 builtin = "Скала"
             elif "/chunk/" in record["texturePath"].replace("\\", "/").lower():
@@ -256,6 +258,9 @@ def scan(game, workshop=None, version="1.6", cached=None, config=None, active_on
                 builtin = "Стена / связанная постройка"
             record["builtin3d"] = builtin
             record["builtin3dLocked"] = locked
+            template = Path(__file__).parent / "models" / (record["defName"] + ".xml")
+            if record["defName"] == "TorchWallLamp" and not record["models"] and template.is_file():
+                record["models"] = [dict(file=str(template.resolve()), index=0, filter="", mod="RimVision · шаблон", legacy=False)]
             record["inactiveContent"] = active is not None and package.lower() not in active
             record_textures, record_variants = textures, variants
             record_originals, record_original_variants = originals, original_variants

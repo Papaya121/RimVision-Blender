@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 28),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 29),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -404,19 +404,25 @@ class RV_UL_catalog(bpy.types.UIList):
         icon_id = preview_icon(record) if record else 0
         row = layout.row()
         row.active = not record.get("inactiveContent", False)
+        columns = row.split(factor=0.25)
+        title = columns.column()
         if icon_id:
-            row.label(text=item.label, icon_value=icon_id)
+            title.label(text=item.label, icon_value=icon_id)
         else:
-            row.label(text=item.label, icon="MESH_CUBE")
-        row.label(text=item.name)
-        if record.get("inactiveContent"):
-            row.label(text="Выкл.", icon="CHECKBOX_DEHLT")
+            title.label(text=item.label, icon="MESH_CUBE")
+        remaining = columns.split(factor=1 / 3)
+        remaining.column().label(text=item.name)
+        flags = remaining.split(factor=0.5)
+        flags.column().label(text="Выкл." if record.get("inactiveContent") else "", icon="CHECKBOX_DEHLT" if record.get("inactiveContent") else "NONE")
+        status = flags.column()
         if record.get("builtin3dLocked") or record.get("door"):
-            row.label(text="3D • замена недоступна", icon="LOCKED")
+            status.label(text="3D • замена недоступна", icon="LOCKED")
         elif record.get("models"):
-            row.label(text="Кастомная 3D", icon="CHECKMARK")
+            status.label(text="Кастомная 3D", icon="CHECKMARK")
         elif record.get("builtin3d") or record.get("defName") == "Wall":
-            row.label(text="Встроенная 3D", icon="MESH_CUBE")
+            status.label(text="Встроенная 3D", icon="MESH_CUBE")
+        else:
+            status.label(text="")
 
 
 class RV_UL_mod_filter(bpy.types.UIList):
@@ -1487,7 +1493,7 @@ def draw_item_card(layout, context):
             box.label(text="Экспорт XML не заменит её в игре", icon="INFO")
         else:
             box.label(text="Встроенную геометрию можно заменить XML")
-            box.label(text="Исходная геометрия из кода не импортируется")
+            box.label(text="Готовый шаблон факела можно загрузить ниже" if record["defName"] == "TorchWallLamp" else "Исходная геометрия из кода не импортируется")
     if not icon:
         box.label(text="Спрайт не найден", icon="IMAGE_DATA")
         if record.get("texturePath"):
