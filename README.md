@@ -1,4 +1,4 @@
-# RimVision Model Tools 0.4.24
+# RimVision Model Tools 0.4.25
 
 Аддон для работы с моделями RimVision непосредственно в Blender. Unity и запуск
 RimWorld не нужны. В готовый ZIP включён экстрактор игровых ресурсов для
@@ -10,6 +10,9 @@ UnityPy 1.20.26 в окружении Blender; каталог обычных PNG
 без него. Работа в интерфейсе Blender и игре пока не проверена запуском.
 
 ## Установка и начало работы
+
+«Открыть аддон» начинает выбор папки в `RimWorld/Mods`, если игра найдена.
+Если путь игры ещё не задан, кнопка сначала использует обычный автопоиск.
 
 Для обновлений через Blender Extensions добавьте Remote Repository в
 Preferences → Get Extensions → Repositories:

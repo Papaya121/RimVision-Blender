@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 24),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 25),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -1001,6 +1001,10 @@ class RVOpenAddon(bpy.types.Operator):
     filter_folder: BoolProperty(default=True, options={"HIDDEN"})
 
     def invoke(self, context, event):
+        settings = context.scene.rimvision
+        game = Path(bpy.path.abspath(settings.game)) if settings.game else locate(settings)
+        if game and (game / "Mods").is_dir():
+            self.directory = (game / "Mods").resolve().as_posix() + "/"
         context.window_manager.fileselect_add(self)
         return {"RUNNING_MODAL"}
 
