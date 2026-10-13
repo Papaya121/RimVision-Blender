@@ -19,10 +19,10 @@ def write_xml(root, path):
 def create(parent, name, version):
     name = name.strip()
     if not name:
-        raise ValueError("Введите название аддона")
+        raise ValueError("Enter an addon name")
     folder = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")
     if not folder or folder.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *["COM" + str(i) for i in range(1, 10)], *["LPT" + str(i) for i in range(1, 10)]}:
-        raise ValueError("Название нельзя использовать для папки")
+        raise ValueError("The name cannot be used for a folder")
     root = Path(parent) / folder
     root.mkdir(parents=True, exist_ok=False)
     (root / "About").mkdir()
@@ -45,7 +45,7 @@ def read(root):
     root = Path(root).resolve()
     about = root / "About/About.xml"
     if not about.is_file():
-        raise ValueError("Выберите корень аддона с About/About.xml")
+        raise ValueError("Select the addon root containing About/About.xml")
     name = ET.parse(about).getroot().findtext("name", root.name)
     models = []
     for namespace in ("RimWorld3DVR", "RimVision"):
@@ -71,7 +71,7 @@ def find_addons(roots):
             about = ET.parse(root / "About/About.xml").getroot()
             package = about.findtext("packageId", "").strip()
             if not package:
-                raise ValueError("В About.xml отсутствует packageId")
+                raise ValueError("About.xml is missing packageId")
             if package.lower() == "papaya.rimvision":
                 continue
             name, models = read(root)
@@ -87,7 +87,7 @@ def ensure_content(root):
     about = ET.parse(root / "About/About.xml").getroot()
     package = about.findtext("packageId", "").strip()
     if not package:
-        raise ValueError("В About.xml отсутствует packageId")
+        raise ValueError("About.xml is missing packageId")
     namespace = re.sub(r"[^A-Za-z0-9_.-]", "_", package)
     path = root / "Strings/RimVision" / namespace / "Models.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,7 +132,7 @@ def add_dependency(root, package, name):
 def update_metadata(root, name, description):
     name = name.strip()
     if not name:
-        raise ValueError("Введите название аддона")
+        raise ValueError("Enter an addon name")
     path = Path(root) / "About/About.xml"
     about = ET.parse(path).getroot()
     for tag, value in (("name", name), ("description", description)):

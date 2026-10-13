@@ -266,24 +266,24 @@ def scan(game, workshop=None, version="1.6", cached=None, config=None, active_on
                     record["texturePath"] = choices[-1][1]
             builtin, locked = "", False
             if record["door"]:
-                builtin, locked = "Дверь", True
+                builtin, locked = "Door", True
             elif record["defName"] == "Vent":
-                builtin, locked = "Вентиляция", True
+                builtin, locked = "Vent", True
             elif record["defName"] == "TorchWallLamp":
-                builtin = "Настенный факел"
+                builtin = "Wall torch"
             elif text(resolved, "building/isNaturalRock").lower() == "true":
-                builtin = "Скала"
+                builtin = "Rock"
             elif "/chunk/" in record["texturePath"].replace("\\", "/").lower():
-                builtin = "Каменный обломок"
+                builtin = "Stone chunk"
             elif record["defName"] == "Wall" or (record["category"] == "Building" and
                 text(resolved, "graphicData/linkType", "None") != "None" and
                 (float(text(resolved, "fillPercent", "0")) >= 1 or text(resolved, "mineable").lower() == "true")):
-                builtin = "Стена / связанная постройка"
+                builtin = "Wall / linked building"
             record["builtin3d"] = builtin
             record["builtin3dLocked"] = locked
             template = Path(__file__).parent / "models" / (record["defName"] + ".xml")
             if record["defName"] == "TorchWallLamp" and not record["models"] and template.is_file():
-                record["models"] = [dict(file=str(template.resolve()), index=0, filter="", mod="RimVision · шаблон", legacy=False)]
+                record["models"] = [dict(file=str(template.resolve()), index=0, filter="", mod="RimVision · template", legacy=False)]
             record["inactiveContent"] = active is not None and package.lower() not in active
             record_textures, record_variants = textures, variants
             record_originals, record_original_variants = originals, original_variants
@@ -313,7 +313,7 @@ def scan(game, workshop=None, version="1.6", cached=None, config=None, active_on
                     body_path = human_body_path.replace("\\", "/").casefold()
                     record["previewSprite"] = record_textures.get(body_path + "_south", "") or record_textures.get(body_path, "")
                     if record["previewSprite"]:
-                        record["previewNote"] = "Базовое тело; портрет собирается игрой"
+                        record["previewNote"] = "Base body; the game assembles the portrait"
             records[(package, record["defName"])] = record
         except (ValueError, OSError) as error:
             warnings.append(text(node, "defName") + ": " + str(error))

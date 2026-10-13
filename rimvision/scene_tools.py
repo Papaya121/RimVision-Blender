@@ -9,6 +9,7 @@ import bpy
 from mathutils import Euler, Vector
 
 from .model import face_uvs, read_model
+from .i18n import tr
 
 
 def sprite_path(record, direction):
@@ -23,7 +24,7 @@ def name_resource(resource, record, kind):
         return
     if resource.get("rimvision_resource_def", record["defName"]) != record["defName"]:
         return
-    resource.name = "RV | " + record["defName"] + " | " + kind
+    resource.name = "RV | " + record["defName"] + " | " + tr(kind)
     resource["rimvision_auto_name"] = resource.name
     resource["rimvision_resource_def"] = record["defName"]
 
@@ -34,9 +35,9 @@ def game_image(record, direction, path, original=False):
         actual = next((key for key, value in record.get("directionalSprites", {}).items() if value == path), "")
         if original and not actual:
             actual = next((key for key in ("North", "East", "South", "West") if record.get("baseSprite" + key) == path), "")
-        kind = {"North": "Север", "South": "Юг", "East": "Восток", "West": "Запад"}.get(actual, "Спрайт")
+        kind = {"North": "North", "South": "South", "East": "East", "West": "West"}.get(actual, "Sprite")
         if original and path != sprite_path(record, direction):
-            kind += " · исходный"
+            kind += " · original"
         name_resource(image, record, kind)
     return image
 
@@ -58,19 +59,19 @@ def atlas_image(record):
         if path and Path(path).is_file():
             tiles.append((path, column, row, mirrored, Path(path).stat().st_mtime_ns))
     if not tiles:
-        raise ValueError("Для атласа сначала подготовьте спрайты предмета")
+        raise ValueError("Prepare item sprites before creating an atlas")
     fingerprint = hashlib.sha256(repr(tiles).encode("utf-8")).hexdigest()
-    name = "RV | " + record["defName"] + " | Атлас 2×2"
+    name = "RV | " + record["defName"] + " | Atlas 2×2"
     existing = next((image for image in bpy.data.images if image.get("rimvision_atlas") == fingerprint), None)
     if existing is not None:
         if existing.get("rimvision_auto_name") or existing.name.startswith("RimVision atlas "):
-            name_resource(existing, record, "Атлас 2×2")
+            name_resource(existing, record, "Atlas 2×2")
         return existing
     images = [(game_image(record, "Thing", path), column, row, mirrored) for path, column, row, mirrored, _ in tiles]
     width = max(image.size[0] for image, _, _, _ in images)
     height = max(image.size[1] for image, _, _, _ in images)
     if min(width, height) <= 0:
-        raise ValueError("Не удалось прочитать размеры спрайтов для атласа")
+        raise ValueError("Could not read sprite sizes for the atlas")
     pixels = array("f", [0]) * (width * height * 16)
     for image, column, row, mirrored in images:
         source_width, source_height = image.size
@@ -91,7 +92,7 @@ def atlas_image(record):
     image.pixels.foreach_set(pixels)
     image.update()
     image["rimvision_atlas"] = fingerprint
-    name_resource(image, record, "Атлас 2×2")
+    name_resource(image, record, "Atlas 2×2")
     image.pack()
     return image
 
@@ -102,7 +103,7 @@ def surface_image(surface, record):
     if surface.mode == "Custom":
         path = bpy.path.abspath(surface.texture_path)
         if not surface.texture_path or not Path(path).is_file():
-            raise ValueError("Выберите существующий файл своей текстуры")
+            raise ValueError("Choose an existing custom texture file")
         return bpy.data.images.load(path, check_existing=True)
     return image_for(record, surface.direction) if surface.mode == "Game" else None
 
@@ -112,26 +113,26 @@ def object_surface(material):
         return None, tuple(material.diffuse_color[:3]), ""
     output = next((node for node in material.node_tree.nodes if node.type == "OUTPUT_MATERIAL" and node.is_active_output), None)
     if output is None or not output.inputs["Surface"].is_linked:
-        raise ValueError(material.name + ": подключите Principled BSDF к Material Output")
+        raise ValueError(material.name + ": connect Principled BSDF to Material Output")
     shader = output.inputs["Surface"].links[0].from_node
     if shader.type != "BSDF_PRINCIPLED":
-        raise ValueError(material.name + ": поддерживается цвет или Image Texture в Base Color у Principled BSDF; сложный материал сначала запеките")
+        raise ValueError(material.name + ": use a color or Image Texture in Principled BSDF Base Color; bake complex materials first")
     base_color = shader.inputs["Base Color"]
     if not base_color.is_linked:
         return None, tuple(base_color.default_value[:3]), ""
     link = base_color.links[0]
     node = link.from_node
     if node.type != "TEX_IMAGE" or link.from_socket.name != "Color" or node.image is None:
-        raise ValueError(material.name + ": подключите Image Texture напрямую к Base Color или запеките материал в картинку")
+        raise ValueError(material.name + ": connect Image Texture directly to Base Color or bake the material")
     if node.projection != "FLAT":
-        raise ValueError(material.name + ": для экспорта текстуры нужна UV-проекция Flat")
+        raise ValueError(material.name + ": texture export requires Flat UV projection")
     uv_name = ""
     if node.inputs["Vector"].is_linked:
         vector = node.inputs["Vector"].links[0]
         if vector.from_node.type == "UVMAP":
             uv_name = vector.from_node.uv_map
         elif vector.from_node.type != "TEX_COORD" or vector.from_socket.name != "UV":
-            raise ValueError(material.name + ": используйте UV или UV Map без Mapping; преобразования сначала примените к UV-развёртке")
+            raise ValueError(material.name + ": use UV or UV Map without Mapping; apply transforms to UV first")
     return node.image, (1, 1, 1), uv_name
 
 
@@ -139,7 +140,7 @@ def prepare_texture(surface, record, image=None):
     if image is None:
         image = surface_image(surface, record)
     if image is None or min(image.size) <= 0:
-        raise ValueError("Не удалось загрузить свою текстуру")
+        raise ValueError("Could not load the custom texture")
     size = tuple(image.size)
     copy = image.copy()
     try:
@@ -171,8 +172,8 @@ def imported_texture(file, texture_path):
 def name_material(material, record):
     surface = material.rimvision
     if surface.mode != "Object" and material.get("rimvision_auto_name") is not None:
-        kind = {"Solid": "Цвет", "Custom": "Своя текстура", "Atlas": "Атлас 2×2"}.get(surface.mode,
-            "Игровой · " + {"Thing": "Авто", "North": "Север", "South": "Юг", "East": "Восток", "West": "Запад"}.get(surface.direction, surface.direction))
+        kind = {"Solid": "Color", "Custom": "Custom texture", "Atlas": "Atlas 2×2"}.get(surface.mode,
+            "Game · " + {"Thing": "Auto", "North": "North", "South": "South", "East": "East", "West": "West"}.get(surface.direction, surface.direction))
         name_resource(material, record, kind)
 
 
@@ -322,7 +323,7 @@ def show_reference(scene, record):
     obj.hide_render = True
     obj["rimvision_guide"] = True
     font = bpy.data.curves.new("RimVision reference label", "FONT")
-    font.body = record["defName"] + "  |  " + str(width) + " x " + str(depth) + " cells  |  North +Y"
+    font.body = record["defName"] + "  |  " + tr(str(width) + " x " + str(depth) + " cells  |  North +Y")
     font.size = 0.15
     font.materials.append(material)
     label = bpy.data.objects.new("RimVision reference label", font)
@@ -350,8 +351,8 @@ def show_reference(scene, record):
         if image:
             views.append(("", image, False))
     for direction, image, mirrored in views:
-        title = {"South": "Спереди — лицо на север (+Y)", "North": "Сзади — хвост на юг (−Y)", "East": "Сбоку (восток)", "West": "Сбоку (запад)"}.get(direction, "sprite reference")
-        reference = bpy.data.objects.new("RimVision — " + title, None)
+        title = {"South": "Front — face north (+Y)", "North": "Back — tail south (−Y)", "East": "Side (east)", "West": "Side (west)"}.get(direction, "sprite reference")
+        reference = bpy.data.objects.new("RimVision — " + tr(title), None)
         collection.objects.link(reference)
         reference.empty_display_type = "IMAGE"
         reference.data = image
@@ -402,7 +403,7 @@ def show_reference(scene, record):
 def create_effect_marker(context, record, root, kind, node=None):
     if kind == "light":
         data = bpy.data.lights.new("RimVision light point", "POINT")
-        marker = bpy.data.objects.new("💡 Свет — " + record["defName"], data)
+        marker = bpy.data.objects.new("💡 " + tr("Light") + " — " + record["defName"], data)
     else:
         data = bpy.data.curves.new("RimVision fire marker", "CURVE")
         data.dimensions = "3D"
@@ -425,7 +426,7 @@ def create_effect_marker(context, record, root, kind, node=None):
             shader.inputs["Emission Color"].default_value = material.diffuse_color
             shader.inputs["Emission Strength"].default_value = 2
         data.materials.append(material)
-        marker = bpy.data.objects.new("🔥 Огонь — " + record["defName"], data)
+        marker = bpy.data.objects.new("🔥 " + tr("Fire") + " — " + record["defName"], data)
         marker.hide_render = True
     context.collection.objects.link(marker)
     marker.parent = root
@@ -484,7 +485,7 @@ def import_model(context, record, file, index):
             key = (face["texture_path"], face["direction"], face["color"], face["tint"], face["two_sided"], face["turret_top"], face["required_links"], face["forbidden_links"])
             if key not in materials:
                 material = bpy.data.materials.new(record["defName"] + " " + ("solid" if face["color"] else face["direction"]))
-                name_resource(material, record, "Материал")
+                name_resource(material, record, "Material")
                 surface = material.rimvision
                 surface.mode = "Solid" if face["color"] else "Custom" if face["texture_path"] else "Game"
                 if face["texture_path"]:
@@ -505,7 +506,7 @@ def import_model(context, record, file, index):
                 if original is not None:
                     uv_size = tuple(original.size)
                 elif record.get("packageId", "").lower().startswith("ludeon.rimworld"):
-                    raise ValueError("Для UV старой модели нужны исходные спрайты игры. Нажмите «Подготовить спрайты игры» и загрузите модель заново.")
+                    raise ValueError("Legacy model UVs require original game sprites. Prepare game sprites and load the model again.")
             ready = uv_size is not None and uv_size[0] > 0 and uv_size[1] > 0
             pending.data[polygon.index].value = pixels and not ready and not face["color"]
             for loop, (u, v) in zip(polygon.loop_indices, reversed(coords)):

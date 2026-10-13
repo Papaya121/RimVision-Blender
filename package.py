@@ -31,7 +31,7 @@ def write_file(archive, file, name):
     entry.compress_type = zipfile.ZIP_DEFLATED
     entry.external_attr = 0o100644 << 16
     data = file.read_bytes()
-    if file.suffix in (".py", ".md", ".toml") or file.name == "LICENSE":
+    if file.suffix in (".py", ".md", ".toml", ".json") or file.name == "LICENSE":
         data = data.replace(b"\r\n", b"\n")
     archive.writestr(entry, data)
 
@@ -39,6 +39,7 @@ def write_file(archive, file, name):
 with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
     for file in sources:
         write_file(archive, file, prefix + file.name)
+    write_file(archive, root / "rimvision/translations.json", prefix + "translations.json")
     for file in sorted((root / "wheels").glob("*.whl")):
         write_file(archive, file, prefix + "wheels/" + file.name)
     for file in sorted((root / "rimvision/models").glob("*.xml")):

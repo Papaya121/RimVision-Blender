@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 31),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 32),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -15,10 +15,12 @@ import bpy
 import bpy.utils.previews
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
-for _module_name in ("addon", "catalog", "paths", "model", "sprites", "scene_tools"):
+for _module_name in ("i18n", "addon", "catalog", "paths", "model", "sprites", "scene_tools"):
     _module = sys.modules.get(__name__ + "." + _module_name)
     if _module is not None:
         importlib.reload(_module)
+from . import i18n
+from .i18n import CONTEXT, language_changed, preferences, tr, translated_items, ui
 from .catalog import active_mods, discover, load_snapshot, scan, sprite_folders
 from .paths import find_installations
 from .scene_tools import create_effect_marker, frame_model, image_for, import_model, material_preview, name_material, name_resource, object_surface, prepare_texture, refresh_model_textures, show_catalog_models, show_reference, sprite_path
@@ -27,10 +29,10 @@ from .addon import add_dependency, create as create_addon, ensure_content, find_
 
 _records = []
 _previews = None
-_mod_items = [("All", "Все моды", "")]
+_mod_items = [("All", "All mods", "")]
 _model_items = {}
-_empty_model_items = [("None", "Модели не найдены", "")]
-_file_model_items = [("0", "Основная модель", "")]
+_empty_model_items = [("None", "No models found", "")]
+_file_model_items = [("0", "Default model", "")]
 _extracting = None
 _loading = False
 _known_meshes = {}
@@ -124,19 +126,20 @@ def attach_new_meshes():
                     obj[key] = root[key]
             if not len(obj.data.materials):
                 material = bpy.data.materials.new(obj.name + " surface")
-                name_resource(material, record, "Материал")
+                name_resource(material, record, "Material")
                 material.rimvision.use_uv = False
                 obj.data.materials.append(material)
             attach_to_addon(bpy.context, obj)
-            scene.rimvision.status = "Добавлено в модель: " + root.name
+            scene.rimvision.status = "Added to model: " + root.name
         except (ReferenceError, RuntimeError, ValueError) as error:
-            print("[RimVision] Привязка меша: " + str(error))
+            print("[RimVision] Mesh attachment: " + str(error))
     return None
 
 
 def refresh(self, context):
     self.entries.clear()
     needle = self.search.casefold()
+    content_state, model_status = self.content_state, self.model_status
     for index, record in enumerate(_records):
         if needle not in " ".join(str(record.get(key, "")) for key in ("defName", "label", "mod", "packageId")).casefold():
             continue
@@ -144,9 +147,17 @@ def refresh(self, context):
             continue
         if self.mod_filter != "All" and record.get("packageId") != self.mod_filter:
             continue
-        if self.models_only and not record.get("models"):
+        inactive = record.get("inactiveContent", False)
+        if content_state == "Enabled" and inactive or content_state == "Disabled" and not inactive:
             continue
-        if self.missing_models_only and record.get("models"):
+        ready = bool(record.get("models"))
+        builtin = bool(record.get("builtin3d")) or record["defName"] == "Wall"
+        locked = bool(record.get("builtin3dLocked") or record.get("door"))
+        editable = not locked and (record.get("category") in ("Building", "Item", "Plant") or record.get("animal", False))
+        matches = (model_status == "All" or model_status == "Ready" and ready or model_status == "Missing" and not ready or
+                   model_status == "BuiltinEditable" and builtin and not locked or model_status == "Locked" and locked or
+                   model_status == "Editable" and editable or model_status == "Unsupported" and not editable)
+        if not matches:
             continue
         entry = self.entries.add()
         entry.name = record["defName"]
@@ -174,20 +185,6 @@ def mod_index_changed(self, context):
             self.mod_filter = package
 
 
-def ready_filter_changed(self, context):
-    if self.models_only and self.missing_models_only:
-        self.missing_models_only = False
-        return
-    refresh(self, context)
-
-
-def missing_filter_changed(self, context):
-    if self.missing_models_only and self.models_only:
-        self.models_only = False
-        return
-    refresh(self, context)
-
-
 def selection_changed(self, context):
     if _loading or not self.auto_reference or context is None or context.scene != self.id_data or self.workflow_stage in ("Setup", "Addons"):
         return
@@ -196,7 +193,7 @@ def selection_changed(self, context):
         try:
             show_reference(context.scene, record)
         except (OSError, RuntimeError, ValueError) as error:
-            self.status = "Референс: " + str(error)
+            self.status = "Reference: " + str(error)
 
 
 def reference_transform_changed(self, context):
@@ -209,7 +206,7 @@ def reference_transform_changed(self, context):
         try:
             show_reference(context.scene, record)
         except (OSError, RuntimeError, ValueError) as error:
-            self.status = "Референс: " + str(error)
+            self.status = "Reference: " + str(error)
 
 
 def index_changed(self, context):
@@ -291,28 +288,38 @@ def preview_icon(record):
 
 
 class RVEntry(bpy.types.PropertyGroup):
-    label: StringProperty()
-    record_index: IntProperty()
+    label: StringProperty(translation_context=CONTEXT)
+    record_index: IntProperty(translation_context=CONTEXT)
 
 
 class RVAddonModel(bpy.types.PropertyGroup):
-    definition: StringProperty()
-    file: StringProperty()
-    index: IntProperty()
-    graphic_filter: StringProperty()
+    definition: StringProperty(translation_context=CONTEXT)
+    file: StringProperty(translation_context=CONTEXT)
+    index: IntProperty(translation_context=CONTEXT)
+    graphic_filter: StringProperty(translation_context=CONTEXT)
 
 
 class RVFoundAddon(bpy.types.PropertyGroup):
-    path: StringProperty(subtype="DIR_PATH")
-    package: StringProperty()
-    count: IntProperty()
-    state: StringProperty()
-    origin: StringProperty()
+    path: StringProperty(subtype="DIR_PATH", translation_context=CONTEXT)
+    package: StringProperty(translation_context=CONTEXT)
+    count: IntProperty(translation_context=CONTEXT)
+    state: StringProperty(translation_context=CONTEXT)
+    origin: StringProperty(translation_context=CONTEXT)
 
 
 class RVModEntry(bpy.types.PropertyGroup):
-    label: StringProperty()
-    inactive: BoolProperty()
+    label: StringProperty(translation_context=CONTEXT)
+    inactive: BoolProperty(translation_context=CONTEXT)
+
+
+class RVPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+    language: EnumProperty(name="Language", description="Use Blender's language, or choose the addon interface language",
+        items=translated_items([("AUTO", "Blender language", "", 0, 0), ("EN", "English", "", 0, 1), ("RU", "Русский", "", 0, 2)]),
+        default=0, update=language_changed, translation_context=CONTEXT)
+
+    def draw(self, context):
+        ui(self.layout).prop(self, "language")
 
 
 def effect_changed(self, context):
@@ -325,92 +332,97 @@ def effect_changed(self, context):
 
 
 class RVEffectSettings(bpy.types.PropertyGroup):
-    kind: EnumProperty(items=[("None", "Нет", ""), ("fire", "Огонь", ""), ("light", "Свет", "")], default="None", update=effect_changed)
-    size: FloatProperty(name="Размер огня", default=1, min=0.05, max=5)
-    radius: FloatProperty(name="Визуальный радиус света", default=8, min=0.1, max=32, update=effect_changed)
-    intensity: FloatProperty(name="Яркость", default=1, min=0, max=8, update=effect_changed)
-    color: FloatVectorProperty(name="Оттенок игрового света", subtype="COLOR", size=3, min=0, max=1, default=(1, 1, 1), update=effect_changed)
-    always: BoolProperty(name="Декоративный огонь — горит всегда", default=False)
+    kind: EnumProperty(items=translated_items([("None", "None", ""), ("fire", "Fire", ""), ("light", "Light", "")]), default=0, update=effect_changed, translation_context=CONTEXT)
+    size: FloatProperty(name="Fire size", default=1, min=0.05, max=5, translation_context=CONTEXT)
+    radius: FloatProperty(name="Visual light radius", default=8, min=0.1, max=32, update=effect_changed, translation_context=CONTEXT)
+    intensity: FloatProperty(name="Intensity", default=1, min=0, max=8, update=effect_changed, translation_context=CONTEXT)
+    color: FloatVectorProperty(name="Game light tint", subtype="COLOR", size=3, min=0, max=1, default=(1, 1, 1), update=effect_changed, translation_context=CONTEXT)
+    always: BoolProperty(name="Decorative fire — always burning", default=False, translation_context=CONTEXT)
 
 
 class RVSettings(bpy.types.PropertyGroup):
-    workflow_stage: EnumProperty(items=[("Auto", "Автоматически", ""), ("Setup", "Подготовка", ""), ("Addons", "Выбор аддона", ""), ("Ready", "Работа", "")], default="Auto")
-    game: StringProperty(name="RimWorld folder", subtype="DIR_PATH")
-    workshop: StringProperty(name="Workshop 294100 folder", subtype="DIR_PATH")
-    model_root: StringProperty(name="Папка мода с моделями", description="Необязательная рабочая копия мода с папкой OptionalContent; её модели имеют приоритет", subtype="DIR_PATH")
-    version: StringProperty(name="RimWorld version", default="1.6")
-    snapshot: StringProperty(name="Loaded catalog JSON", subtype="FILE_PATH")
-    config: StringProperty(name="ModsConfig.xml", subtype="FILE_PATH")
-    active_only: BoolProperty(name="Только активные моды", default=False)
-    advanced: BoolProperty(name="Пути и дополнительные настройки")
-    surface_options: BoolProperty(name="Настройки активного материала", update=section_changed("surface_options"))
-    addon_options: BoolProperty(name="Аддон", update=section_changed("addon_options"))
-    addon_models_options: BoolProperty(name="Модели аддона", default=True, update=section_changed("addon_models_options"))
-    setup_options: BoolProperty(name="Игра и пути", update=section_changed("setup_options"))
-    catalog_options: BoolProperty(name="Каталог", update=section_changed("catalog_options"))
-    model_options: BoolProperty(name="Текущая модель", update=section_changed("model_options"))
-    reference_options: BoolProperty(name="Референс", update=section_changed("reference_options"))
-    effect_options: BoolProperty(name="Огонь и свет", update=section_changed("effect_options"))
-    export_options: BoolProperty(name="Сохранение и экспорт", update=section_changed("export_options"))
-    mod_filter: EnumProperty(name="Мод", items=lambda self, context: _mod_items, update=mod_filter_changed)
-    mod_entries: CollectionProperty(type=RVModEntry)
-    mod_index: IntProperty(update=mod_index_changed)
-    models_only: BoolProperty(name="Только с готовой моделью", update=ready_filter_changed)
-    missing_models_only: BoolProperty(name="Только без готовой модели", update=missing_filter_changed)
-    model_choice: EnumProperty(name="Модель", items=model_items)
-    reference_direction: EnumProperty(name="Направление референса", items=_directions, default="South", update=selection_changed)
-    reference_all_sides: BoolProperty(name="Все доступные стороны", default=True, update=reference_transform_changed)
-    reference_opacity: FloatProperty(name="Прозрачность референса", min=0.05, max=1, default=0.8, update=selection_changed)
-    reference_side: EnumProperty(name="Сторона размещения", items=[("Right", "Справа (+X)", ""), ("Left", "Слева (−X)", ""),
-        ("North", "Север (+Y)", ""), ("South", "Юг (−Y)", ""), ("Above", "Сверху (+Z)", ""), ("Below", "Снизу (−Z)", "")], default="Right", update=reference_transform_changed)
-    reference_gap: FloatProperty(name="Отступ от модели", default=0.5, min=0, update=reference_transform_changed)
-    reference_offset: FloatVectorProperty(name="Дополнительное смещение", size=3, subtype="TRANSLATION", default=(0, 0, 0), update=reference_transform_changed)
-    reference_rotation: FloatVectorProperty(name="Поворот", size=3, subtype="EULER", unit="ROTATION", default=(math.pi / 2, 0, -math.pi / 2), update=reference_transform_changed)
-    auto_reference: BoolProperty(name="Референс при выборе предмета", default=True, update=selection_changed)
-    guides: PointerProperty(type=bpy.types.Collection)
-    output: StringProperty(name="Output mod folder", subtype="DIR_PATH")
-    addon_path: StringProperty(subtype="DIR_PATH")
-    addon_name: StringProperty()
-    found_addons: CollectionProperty(type=RVFoundAddon)
-    found_addon_index: IntProperty()
-    addon_discovery_status: StringProperty(default="Аддоны ещё не найдены")
-    addon_edit_name: StringProperty(name="Название мода")
-    addon_description: PointerProperty(type=bpy.types.Text)
-    addon_preview: StringProperty(name="Превью", subtype="FILE_PATH")
-    addon_metadata_options: BoolProperty(name="Название, описание и превью")
-    addon_models: CollectionProperty(type=RVAddonModel)
-    addon_index: IntProperty()
-    addon_collection: PointerProperty(type=bpy.types.Collection)
-    current_model: PointerProperty(type=bpy.types.Object)
-    auto_attach_meshes: BoolProperty(name="Привязывать новые меши из Shift+A", default=True)
-    search: StringProperty(name="Search (name / mod)", update=refresh)
-    category: EnumProperty(name="Category", items=[(v, v, "") for v in ("All", "Building", "Item", "Plant", "Pawn")], default="All", update=refresh)
-    entries: CollectionProperty(type=RVEntry)
-    index: IntProperty(update=index_changed)
-    status: StringProperty(default="Найдите игру и загрузите каталог")
-    sprites_ready: BoolProperty(options={"SKIP_SAVE"})
-    sprite_count: IntProperty(options={"SKIP_SAVE"})
-    sprite_status_context: StringProperty(options={"SKIP_SAVE"})
-    graphic_filter: StringProperty(name="Graphic path filter")
-    height_offset: FloatProperty(name="Height offset", default=0)
-    overwrite: BoolProperty(name="Replace existing model file", default=False)
+    workflow_stage: EnumProperty(items=translated_items([("Auto", "Automatic", ""), ("Setup", "Setup", ""), ("Addons", "Addon selection", ""), ("Ready", "Working", "")]), default=0, translation_context=CONTEXT)
+    game: StringProperty(name="RimWorld folder", subtype="DIR_PATH", translation_context=CONTEXT)
+    workshop: StringProperty(name="Workshop 294100 folder", subtype="DIR_PATH", translation_context=CONTEXT)
+    model_root: StringProperty(name="Mod folder with models", description="Optional working mod copy containing OptionalContent; its models take priority", subtype="DIR_PATH", translation_context=CONTEXT)
+    version: StringProperty(name="RimWorld version", default="1.6", translation_context=CONTEXT)
+    snapshot: StringProperty(name="Loaded catalog JSON", subtype="FILE_PATH", translation_context=CONTEXT)
+    config: StringProperty(name="ModsConfig.xml", subtype="FILE_PATH", translation_context=CONTEXT)
+    active_only: BoolProperty(name="Only active mods", default=False, translation_context=CONTEXT)
+    advanced: BoolProperty(name="Paths and advanced settings", translation_context=CONTEXT)
+    surface_options: BoolProperty(name="Active material settings", update=section_changed("surface_options"), translation_context=CONTEXT)
+    addon_options: BoolProperty(name="Addon", update=section_changed("addon_options"), translation_context=CONTEXT)
+    addon_models_options: BoolProperty(name="Addon models", default=True, update=section_changed("addon_models_options"), translation_context=CONTEXT)
+    setup_options: BoolProperty(name="Game and paths", update=section_changed("setup_options"), translation_context=CONTEXT)
+    catalog_options: BoolProperty(name="Catalog", update=section_changed("catalog_options"), translation_context=CONTEXT)
+    model_options: BoolProperty(name="Current model", update=section_changed("model_options"), translation_context=CONTEXT)
+    reference_options: BoolProperty(name="Reference", update=section_changed("reference_options"), translation_context=CONTEXT)
+    effect_options: BoolProperty(name="Fire and light", update=section_changed("effect_options"), translation_context=CONTEXT)
+    export_options: BoolProperty(name="Save and export", update=section_changed("export_options"), translation_context=CONTEXT)
+    mod_filter: EnumProperty(name="Mod", items=translated_items(lambda self, context: _mod_items), update=mod_filter_changed, translation_context=CONTEXT)
+    mod_entries: CollectionProperty(type=RVModEntry, translation_context=CONTEXT)
+    mod_index: IntProperty(update=mod_index_changed, translation_context=CONTEXT)
+    content_state: EnumProperty(name="Content state", items=translated_items([("All", "All content", "Show content from any installed mod or DLC"),
+        ("Enabled", "Enabled mods / DLC", "Content enabled in ModsConfig.xml"), ("Disabled", "Disabled mods / DLC", "Installed content disabled in ModsConfig.xml")]), default=0, update=refresh, translation_context=CONTEXT)
+    model_status: EnumProperty(name="Model status", items=translated_items([("All", "All models", ""),
+        ("Ready", "Ready XML model", "At least one XML model or editable template exists"), ("Missing", "No XML model", "No saved XML model exists"),
+        ("BuiltinEditable", "Built-in: replaceable", "Built-in geometry can be replaced with an XML model"), ("Locked", "Built-in: locked", "The built-in renderer bypasses XML replacement"),
+        ("Editable", "Editable items", "Item types supported by XML model export"), ("Unsupported", "Replacement unsupported", "Doors, unsupported pawns and other separate renderers")]), default=0, update=refresh, translation_context=CONTEXT)
+    model_choice: EnumProperty(name="Model", items=translated_items(model_items), translation_context=CONTEXT)
+    reference_direction: EnumProperty(name="Reference direction", items=translated_items(_directions), default=3, update=selection_changed, translation_context=CONTEXT)
+    reference_all_sides: BoolProperty(name="All available sides", default=True, update=reference_transform_changed, translation_context=CONTEXT)
+    reference_opacity: FloatProperty(name="Reference opacity", min=0.05, max=1, default=0.8, update=selection_changed, translation_context=CONTEXT)
+    reference_side: EnumProperty(name="Placement side", items=translated_items([("Right", "Right (+X)", ""), ("Left", "Left (−X)", ""),
+        ("North", "North (+Y)", ""), ("South", "South (−Y)", ""), ("Above", "Above (+Z)", ""), ("Below", "Below (−Z)", "")]), default=0, update=reference_transform_changed, translation_context=CONTEXT)
+    reference_gap: FloatProperty(name="Distance from model", default=0.5, min=0, update=reference_transform_changed, translation_context=CONTEXT)
+    reference_offset: FloatVectorProperty(name="Additional offset", size=3, subtype="TRANSLATION", default=(0, 0, 0), update=reference_transform_changed, translation_context=CONTEXT)
+    reference_rotation: FloatVectorProperty(name="Rotation", size=3, subtype="EULER", unit="ROTATION", default=(math.pi / 2, 0, -math.pi / 2), update=reference_transform_changed, translation_context=CONTEXT)
+    auto_reference: BoolProperty(name="Reference on item selection", default=True, update=selection_changed, translation_context=CONTEXT)
+    guides: PointerProperty(type=bpy.types.Collection, translation_context=CONTEXT)
+    output: StringProperty(name="Output mod folder", subtype="DIR_PATH", translation_context=CONTEXT)
+    addon_path: StringProperty(subtype="DIR_PATH", translation_context=CONTEXT)
+    addon_name: StringProperty(translation_context=CONTEXT)
+    found_addons: CollectionProperty(type=RVFoundAddon, translation_context=CONTEXT)
+    found_addon_index: IntProperty(translation_context=CONTEXT)
+    addon_discovery_status: StringProperty(default="Addons have not been searched yet", translation_context=CONTEXT)
+    addon_edit_name: StringProperty(name="Mod name", translation_context=CONTEXT)
+    addon_description: PointerProperty(type=bpy.types.Text, translation_context=CONTEXT)
+    addon_preview: StringProperty(name="Preview", subtype="FILE_PATH", translation_context=CONTEXT)
+    addon_metadata_options: BoolProperty(name="Name, description and preview", translation_context=CONTEXT)
+    addon_models: CollectionProperty(type=RVAddonModel, translation_context=CONTEXT)
+    addon_index: IntProperty(translation_context=CONTEXT)
+    addon_collection: PointerProperty(type=bpy.types.Collection, translation_context=CONTEXT)
+    current_model: PointerProperty(type=bpy.types.Object, translation_context=CONTEXT)
+    auto_attach_meshes: BoolProperty(name="Attach new Shift+A meshes", default=True, translation_context=CONTEXT)
+    search: StringProperty(name="Search (name / mod)", update=refresh, translation_context=CONTEXT)
+    category: EnumProperty(name="Category", items=translated_items([(v, v, "") for v in ("All", "Building", "Item", "Plant", "Pawn")]), default=0, update=refresh, translation_context=CONTEXT)
+    entries: CollectionProperty(type=RVEntry, translation_context=CONTEXT)
+    index: IntProperty(update=index_changed, translation_context=CONTEXT)
+    status: StringProperty(default="Find the game and load the catalog", translation_context=CONTEXT)
+    sprites_ready: BoolProperty(options={"SKIP_SAVE"}, translation_context=CONTEXT)
+    sprite_count: IntProperty(options={"SKIP_SAVE"}, translation_context=CONTEXT)
+    sprite_status_context: StringProperty(options={"SKIP_SAVE"}, translation_context=CONTEXT)
+    graphic_filter: StringProperty(name="Graphic path filter", translation_context=CONTEXT)
+    height_offset: FloatProperty(name="Height offset", default=0, translation_context=CONTEXT)
+    overwrite: BoolProperty(name="Replace existing model file", default=False, translation_context=CONTEXT)
 
 
 class RVSurface(bpy.types.PropertyGroup):
-    mode: EnumProperty(name="Surface", items=[("Game", "Game texture", ""), ("Solid", "Solid color", ""), ("Custom", "Своя текстура", ""), ("Object", "Материал объекта", "Брать цвет и текстуру из назначенного материала Blender"), ("Atlas", "Атлас всех ракурсов", "Объединить игровые спрайты в одну текстуру 2×2 для UV-развёртки")], default="Game")
-    texture_path: StringProperty(name="Файл текстуры", subtype="FILE_PATH")
-    direction: EnumProperty(name="Texture direction", items=_directions, default="Thing")
-    color: FloatVectorProperty(name="Color", subtype="COLOR", size=3, min=0, max=1, default=(0.5, 0.5, 0.5))
-    tint: BoolProperty(name="Tint with thing color")
-    two_sided: BoolProperty(name="Two sided", default=True)
-    turret_top: BoolProperty(name="Turret top")
-    required_links: StringProperty(name="Required links")
-    forbidden_links: StringProperty(name="Forbidden links")
-    use_uv: BoolProperty(name="Export active UV map", default=True)
+    mode: EnumProperty(name="Surface", items=translated_items([("Game", "Game texture", ""), ("Solid", "Solid color", ""), ("Custom", "Custom texture", ""), ("Object", "Object material", "Use the color and texture from the assigned Blender material"), ("Atlas", "All-view atlas", "Combine game sprites into one 2×2 texture for UV mapping")]), default=0, translation_context=CONTEXT)
+    texture_path: StringProperty(name="Texture file", subtype="FILE_PATH", translation_context=CONTEXT)
+    direction: EnumProperty(name="Texture direction", items=translated_items(_directions), default=0, translation_context=CONTEXT)
+    color: FloatVectorProperty(name="Color", subtype="COLOR", size=3, min=0, max=1, default=(0.5, 0.5, 0.5), translation_context=CONTEXT)
+    tint: BoolProperty(name="Tint with thing color", translation_context=CONTEXT)
+    two_sided: BoolProperty(name="Two sided", default=True, translation_context=CONTEXT)
+    turret_top: BoolProperty(name="Turret top", translation_context=CONTEXT)
+    required_links: StringProperty(name="Required links", translation_context=CONTEXT)
+    forbidden_links: StringProperty(name="Forbidden links", translation_context=CONTEXT)
+    use_uv: BoolProperty(name="Export active UV map", default=True, translation_context=CONTEXT)
 
 
 class RV_UL_catalog(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        layout = ui(layout)
         record = _records[item.record_index] if item.record_index < len(_records) else {}
         icon_id = preview_icon(record) if record else 0
         row = layout.row()
@@ -422,31 +434,33 @@ class RV_UL_catalog(bpy.types.UIList):
         else:
             title.label(text=item.label, icon="MESH_CUBE")
         remaining = columns.split(factor=1 / 3)
-        remaining.column().label(text=item.name)
+        remaining.column().label(text=item.name, translate=False)
         flags = remaining.split(factor=0.5)
-        flags.column().label(text="Выкл." if record.get("inactiveContent") else "", icon="CHECKBOX_DEHLT" if record.get("inactiveContent") else "NONE")
+        flags.column().label(text="Disabled" if record.get("inactiveContent") else "", icon="CHECKBOX_DEHLT" if record.get("inactiveContent") else "NONE")
         status = flags.column()
         if record.get("builtin3dLocked") or record.get("door"):
-            status.label(text="3D • замена недоступна", icon="LOCKED")
+            status.label(text="3D • replacement unsupported", icon="LOCKED")
         elif record.get("models"):
-            status.label(text="Кастомная 3D", icon="CHECKMARK")
+            status.label(text="Custom 3D", icon="CHECKMARK")
         elif record.get("builtin3d") or record.get("defName") == "Wall":
-            status.label(text="Встроенная 3D", icon="MESH_CUBE")
+            status.label(text="Built-in 3D", icon="MESH_CUBE")
         else:
             status.label(text="")
 
 
 class RV_UL_mod_filter(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        layout = ui(layout)
         row = layout.row()
         row.active = not item.inactive
         row.label(text=item.label, icon="CHECKBOX_DEHLT" if item.inactive else "CHECKBOX_HLT")
         if item.inactive:
-            row.label(text="Выкл.")
+            row.label(text="Disabled")
 
 
 class RVModFilterPanel(bpy.types.Panel):
-    bl_label = "Мод"
+    bl_translation_context = CONTEXT
+    bl_label = "Mod"
     bl_idname = "RIMVISION_PT_mod_filter"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -456,15 +470,16 @@ class RVModFilterPanel(bpy.types.Panel):
     def draw(self, context):
         settings = context.scene.rimvision
         if settings.mod_entries:
-            self.layout.template_list("RV_UL_mod_filter", "", settings, "mod_entries", settings, "mod_index", rows=min(len(settings.mod_entries), 12))
+            ui(self.layout).template_list("RV_UL_mod_filter", "", settings, "mod_entries", settings, "mod_index", rows=min(len(settings.mod_entries), 12))
         else:
-            self.layout.label(text="Сначала загрузите каталог")
+            ui(self.layout).label(text="Load the catalog first")
 
 
 class RVLoad(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.load_catalog"
     bl_label = "Load catalog"
-    source: EnumProperty(items=[("Files", "Files", ""), ("Snapshot", "Snapshot", "")])
+    source: EnumProperty(items=translated_items([("Files", "Files", ""), ("Snapshot", "Snapshot", "")]), translation_context=CONTEXT)
 
     def execute(self, context):
         global _records, _mod_items, _model_items, _loading
@@ -479,7 +494,7 @@ class RVLoad(bpy.types.Operator):
                 if not settings.game:
                     locate(settings)
                 if not settings.game:
-                    raise ValueError("Игра не найдена. Укажите папку RimWorld в настройках путей.")
+                    raise ValueError("Game not found. Set the RimWorld folder in path settings.")
                 game = Path(bpy.path.abspath(settings.game))
                 _, auto_workshops, _ = find_installations(str(game))
                 workshop = list(dict.fromkeys([*auto_workshops, *([Path(bpy.path.abspath(settings.workshop))] if settings.workshop else [])]))
@@ -494,14 +509,14 @@ class RVLoad(bpy.types.Operator):
                                          bpy.path.abspath(settings.model_root) if settings.model_root else None,
                                          base_cached=originals,
                                          supplemental_cached=cached_textures(cache_root(), game, roots, supplemental=True))
-                status = str(len(records)) + " объектов • " + str(sum(bool(r.get("models")) for r in records)) + " с моделями • XML-патчи не применяются"
+                status = str(len(records)) + " objects • " + str(sum(bool(r.get("models")) for r in records)) + " with models • XML patches are not applied"
                 for warning in warnings:
                     print("[RimVision] " + warning)
             _records = records
             inactive_packages = {record.get("packageId") for record in records if record.get("inactiveContent", False)}
             mods = {r.get("packageId", ""): r.get("mod", "") for r in records}
-            _mod_items = [("All", "Все моды", "")] + [(package, name or package, package) for package, name in sorted(mods.items(), key=lambda p: p[1].casefold()) if package]
-            _model_items = {r["defName"]: [(str(i), (m["filter"] or "Основная") + " • " + m["mod"], m["file"], i) for i, m in enumerate(r.get("models", []))] for r in records if r.get("models")}
+            _mod_items = [("All", "All mods", "")] + [(package, name or package, package) for package, name in sorted(mods.items(), key=lambda p: p[1].casefold()) if package]
+            _model_items = {r["defName"]: [(str(i), (m["filter"] or "Default") + " • " + m["mod"], m["file"], i) for i, m in enumerate(r.get("models", []))] for r in records if r.get("models")}
             _previews.clear()
             _loading = True
             try:
@@ -526,42 +541,44 @@ class RVLoad(bpy.types.Operator):
             if settings.workflow_stage == "Setup" and _records and settings.sprites_ready and settings.sprite_status_context == sprite_status_context(settings):
                 settings.workflow_stage = "Addons"
         except (OSError, ValueError, KeyError, ET.ParseError, TypeError, RuntimeError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVFind(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.find_game"
-    bl_label = "Найти игру и загрузить каталог"
+    bl_label = "Find game and load catalog"
 
     def execute(self, context):
         if not locate(context.scene.rimvision):
             context.scene.rimvision.advanced = True
-            self.report({"ERROR"}, "RimWorld не найден в Steam-библиотеках; укажите папку вручную")
+            self.report({"ERROR"}, tr("RimWorld was not found in Steam libraries; select its folder manually"))
             return {"CANCELLED"}
         try:
             return bpy.ops.rimvision.load_catalog(source="Files")
         except RuntimeError as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
 
 
 class RVPrepareSprites(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.prepare_sprites"
-    bl_label = "Подготовить спрайты игры"
+    bl_label = "Prepare game sprites"
     _timer = None
 
     def execute(self, context):
         global _extracting
         if _extracting:
-            self.report({"WARNING"}, "Извлечение уже выполняется")
+            self.report({"WARNING"}, tr("Extraction is already running"))
             return {"CANCELLED"}
         settings = context.scene.rimvision
         if not settings.game:
             locate(settings)
         if not settings.game:
-            self.report({"ERROR"}, "Сначала найдите папку игры")
+            self.report({"ERROR"}, tr("Find the game folder first"))
             return {"CANCELLED"}
         game = bpy.path.abspath(settings.game)
         _, workshops, _ = find_installations(game)
@@ -574,7 +591,7 @@ class RVPrepareSprites(bpy.types.Operator):
             roots = sprite_folders(mods, settings.version, active)
             extra_roots = [root for root in sprite_folders(mods, settings.version, active, include_inactive=True) if root not in roots]
         except (OSError, ValueError, ET.ParseError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         cache = cache_root()
         self._messages = queue.Queue()
@@ -594,7 +611,7 @@ class RVPrepareSprites(bpy.types.Operator):
         _extracting = self
         self._timer = context.window_manager.event_timer_add(0.2, window=context.window)
         context.window_manager.modal_handler_add(self)
-        settings.status = "Извлечение спрайтов… Esc — отмена"
+        settings.status = "Extracting sprites… Esc — cancel"
         return {"RUNNING_MODAL"}
 
     def cancel(self, context):
@@ -608,25 +625,25 @@ class RVPrepareSprites(bpy.types.Operator):
     def modal(self, context, event):
         if event.type == "ESC":
             self._cancelled.set()
-            self._scene.rimvision.status = "Отмена извлечения…"
+            self._scene.rimvision.status = "Cancelling extraction…"
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         while not self._messages.empty():
             kind, value = self._messages.get_nowait()
             if kind == "status":
-                self._scene.rimvision.status = "Спрайты: " + value
+                self._scene.rimvision.status = "Sprites: " + value
             else:
                 cancelled = self._cancelled.is_set()
                 self.cancel(context)
                 if kind == "error":
-                    self.report({"ERROR"}, value)
+                    self.report({"ERROR"}, tr(value))
                     self._scene.rimvision.status = value
                     return {"CANCELLED"}
                 for error in value[1]:
                     print("[RimVision] " + error)
                 if not cancelled and self._scene == context.scene and bpy.path.abspath(context.scene.rimvision.game) == self._game:
                     bpy.ops.rimvision.load_catalog(source="Files")
-                self.report({"INFO"}, ("Извлечение отменено. " if cancelled else "") + "Спрайтов в кэше: " + str(value[0]))
+                self.report({"INFO"}, tr(("Extraction cancelled. " if cancelled else "") + "Cached sprites: " + str(value[0])))
                 return {"FINISHED"}
         if context.area:
             context.area.tag_redraw()
@@ -634,8 +651,9 @@ class RVPrepareSprites(bpy.types.Operator):
 
 
 class RVReference(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.show_reference"
-    bl_label = "Показать референс и сетку клеток"
+    bl_label = "Show reference and cell grid"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -645,92 +663,95 @@ class RVReference(bpy.types.Operator):
         try:
             show_reference(context.scene, record)
         except (OSError, RuntimeError, ValueError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVImport(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.import_model"
-    bl_label = "Добавить готовую модель в сцену"
+    bl_label = "Add ready-made model to scene"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         record = selected(context)
         try:
             if context.mode != "OBJECT" or record is None:
-                raise ValueError("Выберите предмет в Object Mode")
+                raise ValueError("Select an item in Object Mode")
             models = record.get("models", [])
             index = int(context.scene.rimvision.model_choice)
             source = models[index]
             obj = import_model(context, record, source["file"], source["index"])
             attach_to_addon(context, obj)
         except (OSError, RuntimeError, ValueError, IndexError, ET.ParseError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVImportFile(bpy.types.Operator, ImportHelper):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.import_model_file"
-    bl_label = "Открыть XML-модель…"
+    bl_label = "Open XML model…"
     bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".xml"
-    filter_glob: StringProperty(default="*.xml", options={"HIDDEN"})
-    variant: EnumProperty(name="Вариант модели", items=lambda self, context: _file_model_items)
-    pick_variant: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
+    filter_glob: StringProperty(default="*.xml", options={"HIDDEN"}, translation_context=CONTEXT)
+    variant: EnumProperty(name="Model variant", items=translated_items(lambda self, context: _file_model_items), translation_context=CONTEXT)
+    pick_variant: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"}, translation_context=CONTEXT)
 
     def draw(self, context):
-        self.layout.prop(self, "variant")
+        ui(self.layout).prop(self, "variant")
 
     def execute(self, context):
         global _file_model_items
         record = selected(context)
         try:
             if context.mode != "OBJECT" or record is None:
-                raise ValueError("Сначала выберите предмет каталога в Object Mode")
+                raise ValueError("Select a catalog item in Object Mode first")
             nodes = list(ET.parse(self.filepath).getroot())
             candidates = [i for i, node in enumerate(nodes) if node.findtext("thingDef", "").strip() == record["defName"]]
             if not candidates:
-                raise ValueError("В XML нет модели для " + record["defName"])
+                raise ValueError("No XML model for " + record["defName"])
             if len(candidates) > 1 and not self.pick_variant:
-                _file_model_items = [(str(i), nodes[i].findtext("graphicPathContains") or "Основная модель", str(i), i) for i in candidates]
+                _file_model_items = [(str(i), nodes[i].findtext("graphicPathContains") or "Default model", str(i), i) for i in candidates]
                 self.variant = str(candidates[0])
                 self.pick_variant = True
-                return context.window_manager.invoke_props_dialog(self)
+                return context.window_manager.invoke_props_dialog(self, title=tr(self.bl_label))
             index = int(self.variant) if self.pick_variant else candidates[0]
             obj = import_model(context, record, self.filepath, index)
             attach_to_addon(context, obj)
         except (OSError, RuntimeError, ValueError, ET.ParseError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVTemplate(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.create_template"
-    bl_label = "Добавить модель в сцену"
+    bl_label = "Add model to scene"
     bl_options = {"REGISTER", "UNDO"}
-    force_new: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
-    primitive: EnumProperty(name="Начальная форма", items=[("Cube", "Куб", ""), ("Cylinder", "Цилиндр", ""),
-        ("Cone", "Конус", ""), ("Sphere", "UV-сфера", ""), ("Icosphere", "Икосфера", ""),
-        ("Plane", "Плоскость", ""), ("Torus", "Тор", "")], default="Cube")
+    force_new: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"}, translation_context=CONTEXT)
+    primitive: EnumProperty(name="Starting shape", items=translated_items([("Cube", "Cube", ""), ("Cylinder", "Cylinder", ""),
+        ("Cone", "Cone", ""), ("Sphere", "UV sphere", ""), ("Icosphere", "Icosphere", ""),
+        ("Plane", "Plane", ""), ("Torus", "Torus", "")]), default=0, translation_context=CONTEXT)
 
     def invoke(self, context, event):
         record = selected(context)
         if record is None or context.mode != "OBJECT" or (record.get("models") and not self.force_new):
             return self.execute(context)
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, title=tr(self.bl_label))
 
     def draw(self, context):
-        self.layout.prop(self, "primitive")
+        ui(self.layout).prop(self, "primitive")
 
     def execute(self, context):
         record = selected(context)
         if record is None:
             return {"CANCELLED"}
         if context.mode != "OBJECT":
-            self.report({"ERROR"}, "Перейдите в Object Mode")
+            self.report({"ERROR"}, tr("Switch to Object Mode"))
             return {"CANCELLED"}
         if record.get("models") and not self.force_new:
             return RVImport.execute(self, context)
@@ -756,7 +777,7 @@ class RVTemplate(bpy.types.Operator):
             obj.scale = (scale, scale, scale)
         obj.location.z = -min(vertex.co.z for vertex in obj.data.vertices) * obj.scale.z
         material = bpy.data.materials.new(record["defName"] + " surface")
-        name_resource(material, record, "Материал")
+        name_resource(material, record, "Material")
         material.rimvision.use_uv = False
         obj.data.materials.append(material)
         obj["rimvision_def"] = record["defName"]
@@ -771,30 +792,31 @@ class RVTemplate(bpy.types.Operator):
 
 
 class RVTexture(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.use_sprite"
-    bl_label = "Назначить игровой спрайт"
+    bl_label = "Assign game sprite"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         record = selected(context)
         obj = context.object
         if record is None or obj is None or obj.type != "MESH" or context.mode != "OBJECT":
-            self.report({"ERROR"}, "Select a catalog entry and a mesh in Object Mode")
+            self.report({"ERROR"}, tr("Select a catalog entry and a mesh in Object Mode"))
             return {"CANCELLED"}
         direction = obj.active_material.rimvision.direction if obj.active_material else "Thing"
         path = sprite_path(record, direction)
         if not path or not Path(path).is_file():
-            self.report({"ERROR"}, "Спрайт недоступен. Нажмите «Подготовить спрайты игры».")
+            self.report({"ERROR"}, tr("Sprite unavailable. Prepare game sprites first."))
             return {"CANCELLED"}
         try:
             image = image_for(record, direction)
         except RuntimeError as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         material = obj.active_material
         if material is None or material.get("rimvision_auto_name") is None or material.users > 1 or material.rimvision.mode != "Game":
             material = bpy.data.materials.new(record["defName"] + " game texture")
-            name_resource(material, record, "Материал")
+            name_resource(material, record, "Material")
         else:
             material.rimvision.mode = "Game"
             material.rimvision.use_uv = True
@@ -804,7 +826,7 @@ class RVTexture(bpy.types.Operator):
             obj.data.materials[obj.active_material_index] = material
         else:
             obj.data.materials.append(material)
-        self.report({"INFO"}, "Game sprite assigned to the active material slot")
+        self.report({"INFO"}, tr("Game sprite assigned to the active material slot"))
         return {"FINISHED"}
 
 
@@ -836,10 +858,10 @@ def refresh_found_addons(settings):
     for addon in found:
         entry = settings.found_addons.add()
         entry.name, entry.path, entry.package, entry.count = addon["name"], addon["path"], addon["package"], addon["count"]
-        entry.state = "Статус неизвестен" if active is None else "Включён" if entry.package.lower() in active else "Выключен"
-        entry.origin = "Workshop" if any(Path(entry.path).is_relative_to(root.resolve()) for root in workshops) else "Папка мода"
+        entry.state = "Status unknown" if active is None else "Enabled" if entry.package.lower() in active else "Not enabled"
+        entry.origin = "Workshop" if any(Path(entry.path).is_relative_to(root.resolve()) for root in workshops) else "Mod folder"
     settings.found_addon_index = next((i for i, entry in enumerate(settings.found_addons) if entry.path.casefold() == previous.casefold()), 0)
-    settings.addon_discovery_status = "Найдено аддонов: " + str(len(found)) + (" • ошибок: " + str(len(warnings)) if warnings else "")
+    settings.addon_discovery_status = "Addons found: " + str(len(found)) + (" • errors: " + str(len(warnings)) if warnings else "")
     for warning in warnings:
         print("[RimVision] " + warning)
 
@@ -891,7 +913,7 @@ def load_addon_metadata(settings):
     settings.addon_edit_name = name
     description = next((text for text in bpy.data.texts if text.get("rimvision_addon") == root), None)
     if description is None:
-        description = bpy.data.texts.new(name + " — описание")
+        description = bpy.data.texts.new(name + " — description")
         description["rimvision_addon"] = root
     description.from_string(about.findtext("description", ""))
     settings.addon_description = description
@@ -918,8 +940,9 @@ def attach_to_addon(context, obj):
 
 
 class RVEditAddonDescription(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.edit_addon_description"
-    bl_label = "Редактировать описание"
+    bl_label = "Edit description"
 
     def execute(self, context):
         description = context.scene.rimvision.addon_description
@@ -928,7 +951,7 @@ class RVEditAddonDescription(bpy.types.Operator):
                 load_addon_metadata(context.scene.rimvision)
                 description = context.scene.rimvision.addon_description
             except (OSError, ValueError, ET.ParseError, RuntimeError) as error:
-                self.report({"ERROR"}, str(error))
+                self.report({"ERROR"}, tr(str(error)))
                 return {"CANCELLED"}
         if description is None or context.area is None:
             return {"CANCELLED"}
@@ -941,11 +964,11 @@ class RVEditAddonDescription(bpy.types.Operator):
                     result = bpy.ops.screen.area_split(direction="HORIZONTAL", factor=0.65)
                 existing = next((area for area in context.screen.areas if area.as_pointer() not in before), None)
                 if result != {"FINISHED"} or existing is None:
-                    self.report({"ERROR"}, "Не удалось открыть редактор описания")
+                    self.report({"ERROR"}, tr("Could not open the description editor"))
                     return {"CANCELLED"}
                 existing.type = "TEXT_EDITOR"
             except RuntimeError as error:
-                self.report({"ERROR"}, str(error))
+                self.report({"ERROR"}, tr(str(error)))
                 return {"CANCELLED"}
         existing.spaces.active.text = description
         existing.spaces.active.show_word_wrap = True
@@ -953,26 +976,27 @@ class RVEditAddonDescription(bpy.types.Operator):
 
 
 class RVSaveAddonMetadata(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.save_addon_metadata"
-    bl_label = "Сохранить оформление аддона"
+    bl_label = "Save addon metadata"
 
     def execute(self, context):
         settings = context.scene.rimvision
         image = temporary = None
         try:
             if not settings.addon_path or not settings.addon_edit_name.strip():
-                raise ValueError("Откройте аддон и введите его название")
+                raise ValueError("Open an addon and enter its name")
             root = Path(bpy.path.abspath(settings.addon_path))
             read_addon(root)
             destination = root / "About/Preview.png"
             if settings.addon_preview:
                 source = Path(bpy.path.abspath(settings.addon_preview)).resolve()
                 if not source.is_file():
-                    raise ValueError("Файл превью не найден")
+                    raise ValueError("Preview file not found")
                 if source != destination.resolve():
                     image = bpy.data.images.load(str(source), check_existing=False)
                     if image.size[0] <= 0 or image.size[1] <= 0:
-                        raise ValueError("Не удалось прочитать изображение превью")
+                        raise ValueError("Could not read the preview image")
                     with tempfile.NamedTemporaryFile(dir=destination.parent, suffix=".png", delete=False) as output:
                         temporary = Path(output.name)
                     image.file_format = "PNG"
@@ -992,10 +1016,10 @@ class RVSaveAddonMetadata(bpy.types.Operator):
             if settings.addon_collection:
                 settings.addon_collection.name = settings.addon_name
             if settings.addon_description:
-                settings.addon_description.name = settings.addon_name + " — описание"
-            self.report({"INFO"}, "Название, описание и превью сохранены")
+                settings.addon_description.name = settings.addon_name + " — description"
+            self.report({"INFO"}, tr("Name, description and preview saved"))
         except (OSError, RuntimeError, ValueError, ET.ParseError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         finally:
             if image:
@@ -1006,15 +1030,16 @@ class RVSaveAddonMetadata(bpy.types.Operator):
 
 
 class RVCreateAddon(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.create_addon"
-    bl_label = "Создать аддон"
-    name: StringProperty(name="Название")
+    bl_label = "Create addon"
+    name: StringProperty(name="Name", translation_context=CONTEXT)
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, title=tr(self.bl_label))
 
     def draw(self, context):
-        self.layout.prop(self, "name")
+        ui(self.layout).prop(self, "name")
 
     def execute(self, context):
         settings = context.scene.rimvision
@@ -1027,52 +1052,56 @@ class RVCreateAddon(bpy.types.Operator):
                 refresh_found_addons(settings)
             except (OSError, ValueError, ET.ParseError, RuntimeError) as error:
                 settings.addon_discovery_status = str(error)
-            settings.status = "Создан аддон: " + settings.addon_name
-            self.report({"INFO"}, "Аддон создан: " + str(root))
+            settings.status = "Created addon: " + settings.addon_name
+            self.report({"INFO"}, tr("Addon created: " + str(root)))
         except (OSError, ValueError, ET.ParseError, RuntimeError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RV_UL_found_addons(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        layout = ui(layout)
         row = layout.row()
-        row.label(text=item.name, icon="OUTLINER_COLLECTION")
-        row.label(text=str(item.count) + " моделей")
+        row.label(text=item.name, icon="OUTLINER_COLLECTION", translate=False)
+        row.label(text=str(item.count) + " models")
         row.label(text=item.state)
 
 
 class RVFindAddons(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.find_addons"
-    bl_label = "Найти аддоны"
+    bl_label = "Find addons"
 
     def execute(self, context):
         try:
             refresh_found_addons(context.scene.rimvision)
         except (OSError, ValueError, ET.ParseError, RuntimeError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVOpenFoundAddon(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.open_found_addon"
-    bl_label = "Открыть выбранный аддон"
+    bl_label = "Open selected addon"
 
     def execute(self, context):
         settings = context.scene.rimvision
         if not 0 <= settings.found_addon_index < len(settings.found_addons):
-            self.report({"ERROR"}, "Выберите аддон в списке")
+            self.report({"ERROR"}, tr("Select an addon in the list"))
             return {"CANCELLED"}
         return bpy.ops.rimvision.open_addon(directory=settings.found_addons[settings.found_addon_index].path)
 
 
 class RVOpenAddon(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.open_addon"
-    bl_label = "Открыть аддон"
-    directory: StringProperty(subtype="DIR_PATH")
-    filter_folder: BoolProperty(default=True, options={"HIDDEN"})
+    bl_label = "Open addon"
+    directory: StringProperty(subtype="DIR_PATH", translation_context=CONTEXT)
+    filter_folder: BoolProperty(default=True, options={"HIDDEN"}, translation_context=CONTEXT)
 
     def invoke(self, context, event):
         settings = context.scene.rimvision
@@ -1090,60 +1119,64 @@ class RVOpenAddon(bpy.types.Operator):
             else:
                 refresh_found_addons(context.scene.rimvision)
         except (OSError, ValueError, ET.ParseError, RuntimeError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVRefreshAddon(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.refresh_addon"
-    bl_label = "Обновить список моделей аддона"
+    bl_label = "Refresh addon model list"
 
     def execute(self, context):
         try:
             refresh_addon(context.scene.rimvision)
         except (OSError, ValueError, ET.ParseError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVLoadAddonModel(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.load_addon_model"
-    bl_label = "Загрузить модель аддона"
+    bl_label = "Load addon model"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         settings = context.scene.rimvision
         try:
             if context.mode != "OBJECT" or not 0 <= settings.addon_index < len(settings.addon_models):
-                raise ValueError("Выберите модель в Object Mode")
+                raise ValueError("Select a model in Object Mode")
             entry = settings.addon_models[settings.addon_index]
             record = next((r for r in _records if r["defName"] == entry.definition), None)
             if record is None:
-                raise ValueError("Загрузите каталог игры с модом, определяющим " + entry.definition)
+                raise ValueError("Load a game catalog with the mod defining " + entry.definition)
             settings.search = entry.definition
             settings.mod_filter = "All"
             settings.category = "All"
-            settings.models_only = False
-            settings.missing_models_only = False
+            settings.model_status = "All"
+            settings.content_state = "All"
             settings.index = next(i for i, item in enumerate(settings.entries) if _records[item.record_index] is record)
             obj = import_model(context, record, entry.file, entry.index)
             attach_to_addon(context, obj)
         except (OSError, ValueError, RuntimeError, ET.ParseError, StopIteration) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RV_UL_addon(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        layout.label(text=item.name, icon="MESH_DATA")
+        layout = ui(layout)
+        layout.label(text=item.name, icon="MESH_DATA", translate=False)
 
 
 class RVExport(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.export_model"
-    bl_label = "Экспортировать модель"
+    bl_label = "Export model"
 
     def execute(self, context):
         return self._export(context)
@@ -1159,17 +1192,17 @@ class RVExport(bpy.types.Operator):
                 roots.add(model_root(context.object.parent))
             objects = sorted({part for obj in roots for part in (obj, *obj.children_recursive) if part.type == "MESH" and not part.get("rimvision_role")}, key=lambda obj: obj.name)
         if context.mode != "OBJECT" or not objects or record is None:
-            self.report({"ERROR"}, "Select a catalog entry and meshes in Object Mode")
+            self.report({"ERROR"}, tr("Select a catalog entry and meshes in Object Mode"))
             return {"CANCELLED"}
         if (record.get("category") not in ("Building", "Item", "Plant") and not
                 (record.get("category") == "Pawn" and record.get("animal"))) or record.get("door", False):
-            self.report({"ERROR"}, "Поддерживаются постройки, предметы, растения и животные; двери и другие пешки используют отдельный рендер")
+            self.report({"ERROR"}, tr("Supports buildings, items, plants and animals; doors and other pawns use separate renderers"))
             return {"CANCELLED"}
         try:
             if not settings.addon_path and not settings.output:
                 raise ValueError("Select an output mod folder")
             if any(obj.get("rimvision_def") and obj["rimvision_def"] != record["defName"] for obj in objects):
-                raise ValueError("Выделенные меши относятся к другому предмету. Выберите его в каталоге или сохраните коллекцию аддона.")
+                raise ValueError("Selected meshes belong to another item. Select it in the catalog or save the addon collection.")
             if not re.fullmatch(r"[A-Za-z0-9_]+", record["defName"]):
                 raise ValueError("ThingDef name is not safe for a filename")
             suffix = ""
@@ -1223,7 +1256,7 @@ class RVExport(bpy.types.Operator):
                             loops.reverse()
                         positions = [points[mesh.loops[i].vertex_index] for i in loops]
                         if (positions[1] - positions[0]).cross(positions[2] - positions[0]).length_squared <= 1e-16:
-                            raise ValueError(obj.name + ": грань №" + str(triangle.polygon_index + 1) + " после модификаторов имеет нулевую или почти нулевую площадь. Проверьте совпадающие вершины и масштаб модели.")
+                            raise ValueError(obj.name + ": face #" + str(triangle.polygon_index + 1) + " after modifiers has zero or almost zero area. Check overlapping vertices and model scale.")
                         material = mesh.materials[triangle.material_index] if triangle.material_index < len(mesh.materials) else None
                         surface = material.rimvision if material else None
                         from_object = surface is not None and surface.mode == "Object"
@@ -1261,7 +1294,7 @@ class RVExport(bpy.types.Operator):
                                 field(face, "texturePath", texture_path)
                                 field(face, "tintWithThing", str(surface.tint).lower())
                                 if use_uv and uv_layer is None:
-                                    raise ValueError(obj.name + ": не найдена UV-развёртка " + (uv_name or "для текстуры"))
+                                    raise ValueError(obj.name + ": UV map not found " + (uv_name or "for the texture"))
                             else:
                                 field(face, "texture", direction)
                             pending = mesh.attributes.get("rimvision_pending_uv")
@@ -1276,7 +1309,7 @@ class RVExport(bpy.types.Operator):
                                 elif direction not in sizes:
                                     path = sprite_path(record, direction)
                                     if not path or not Path(path).is_file():
-                                        raise ValueError("Для экспорта UV подготовьте спрайты игры или отключите UV у материала.")
+                                        raise ValueError("Prepare game sprites to export UVs, or disable UV export on the material.")
                                     image = image_for(record, direction)
                                     sizes[direction] = tuple(image.size)
                                 if not custom:
@@ -1302,10 +1335,10 @@ class RVExport(bpy.types.Operator):
             helpers = {child for obj in objects for child in obj.children_recursive if child.get("rimvision_role")}
             cutouts = [obj for obj in helpers if obj.get("rimvision_role") == "ground_cutout"]
             if len(cutouts) > 1:
-                raise ValueError("Можно экспортировать только один ground cutout на модель")
+                raise ValueError("Only one ground cutout may be exported per model")
             for cutout in cutouts:
                 if cutout.type != "MESH" or len(cutout.data.polygons) != 1:
-                    raise ValueError("Ground cutout должен содержать одну грань")
+                    raise ValueError("Ground cutout must contain one face")
                 polygon = cutout.data.polygons[0]
                 indices = list(polygon.vertices)
                 if cutout.matrix_world.to_3x3().determinant() > 0:
@@ -1327,7 +1360,7 @@ class RVExport(bpy.types.Operator):
                     effect = obj.rimvision_effect
                     if effect.kind in ("fire", "light"):
                         if effect.kind in effect_kinds:
-                            raise ValueError("В модели допускается одна точка огня и одна точка света")
+                            raise ValueError("A model may have one fire point and one light point")
                         effect_kinds.add(effect.kind)
                         for key, value in (("name", effect.kind), ("size", number(effect.size)), ("radius", number(effect.radius)),
                                            ("intensity", number(effect.intensity)), ("color", ",".join(number(c) for c in effect.color)),
@@ -1386,19 +1419,20 @@ class RVExport(bpy.types.Operator):
                     models.append(source)
                 else:
                     models[existing] = source
-                _model_items[record["defName"]] = [(str(i), (entry["filter"] or "Основная") + " • " + entry["mod"], entry["file"], i) for i, entry in enumerate(models)]
+                _model_items[record["defName"]] = [(str(i), (entry["filter"] or "Default") + " • " + entry["mod"], entry["file"], i) for i, entry in enumerate(models)]
                 if selected(context) is record:
                     settings.model_choice = str(existing if existing is not None else len(models) - 1)
-            self.report({"INFO"}, "Exported " + str(len(faces)) + " triangles to " + str(destination))
+            self.report({"INFO"}, tr("Exported " + str(len(faces)) + " triangles to " + str(destination)))
         except (OSError, ValueError, RuntimeError, ET.ParseError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVAddToAddon(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.add_to_addon"
-    bl_label = "Добавить выделенное в коллекцию аддона"
+    bl_label = "Add selection to addon collection"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -1406,7 +1440,7 @@ class RVAddToAddon(bpy.types.Operator):
         record = selected(context)
         objects = [o for o in context.selected_objects if o.type == "MESH" and not o.get("rimvision_role")]
         if not settings.addon_path or record is None or not objects or context.mode != "OBJECT":
-            self.report({"ERROR"}, "Откройте аддон, выберите предмет каталога и меши в Object Mode")
+            self.report({"ERROR"}, tr("Open an addon, select a catalog item and meshes in Object Mode"))
             return {"CANCELLED"}
         for obj in objects:
             if not obj.get("rimvision_def"):
@@ -1418,8 +1452,9 @@ class RVAddToAddon(bpy.types.Operator):
 
 
 class RVSaveAddon(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.save_addon"
-    bl_label = "Сохранить всю коллекцию"
+    bl_label = "Save entire collection"
 
     def execute(self, context):
         if _pending_meshes:
@@ -1427,7 +1462,7 @@ class RVSaveAddon(bpy.types.Operator):
         settings = context.scene.rimvision
         collection = settings.addon_collection
         if context.mode != "OBJECT" or not settings.addon_path or collection is None:
-            self.report({"ERROR"}, "Откройте аддон в Object Mode")
+            self.report({"ERROR"}, tr("Open an addon in Object Mode"))
             return {"CANCELLED"}
         groups = {}
         for obj in collection.all_objects:
@@ -1436,15 +1471,15 @@ class RVSaveAddon(bpy.types.Operator):
                 key = (root["rimvision_def"], root.get("rimvision_filter", ""), root.get("rimvision_height_offset", 0.0))
                 groups.setdefault(key, []).append(obj)
         if not groups:
-            self.report({"ERROR"}, "В коллекции аддона нет моделей")
+            self.report({"ERROR"}, tr("The addon collection has no models"))
             return {"CANCELLED"}
         records = {record["defName"]: record for record in _records}
         if any(key[0] not in records for key in groups):
-            self.report({"ERROR"}, "Загрузите каталог игры с определениями всех моделей коллекции")
+            self.report({"ERROR"}, tr("Load the game catalog containing all collection model definitions"))
             return {"CANCELLED"}
         targets = [(key[0], key[1]) for key in groups]
         if len(set(targets)) != len(targets):
-            self.report({"ERROR"}, "У одной модели разные смещения высоты; сохраните её отдельно")
+            self.report({"ERROR"}, tr("One model has different height offsets; save it separately"))
             return {"CANCELLED"}
         previous = (settings.graphic_filter, settings.height_offset)
         saved = 0
@@ -1453,24 +1488,24 @@ class RVSaveAddon(bpy.types.Operator):
                 settings.graphic_filter = graphic_filter
                 settings.height_offset = height
                 if RVExport._export(self, context, records[definition], objects) != {"FINISHED"}:
-                    self.report({"WARNING"}, "Сохранено моделей: " + str(saved) + ". Исправьте ошибку и повторите сохранение.")
+                    self.report({"WARNING"}, tr("Models saved: " + str(saved) + ". Fix the error and save again."))
                     return {"CANCELLED"}
                 saved += 1
         finally:
             settings.graphic_filter, settings.height_offset = previous
-        self.report({"INFO"}, "Сохранено моделей в аддон: " + str(saved))
+        self.report({"INFO"}, tr("Models saved to addon: " + str(saved)))
         return {"FINISHED"}
 
 
 def draw_catalog(layout, context, rows=7):
     settings = context.scene.rimvision
-    layout.prop(settings, "search", text="Поиск", icon="VIEWZOOM")
+    layout.prop(settings, "search", text="Search", icon="VIEWZOOM")
     row = layout.row(align=True)
-    row.prop(settings, "category", text="Тип")
-    caption = next((entry.label + (" · выкл." if entry.inactive else "") for entry in settings.mod_entries if entry.name == settings.mod_filter), "Все моды")
+    row.prop(settings, "category", text="Type")
+    caption = next((entry.label + (" · disabled" if entry.inactive else "") for entry in settings.mod_entries if entry.name == settings.mod_filter), "All mods")
     row.popover(panel="RIMVISION_PT_mod_filter", text=caption)
-    layout.prop(settings, "models_only")
-    layout.prop(settings, "missing_models_only")
+    layout.prop(settings, "content_state")
+    layout.prop(settings, "model_status")
     layout.template_list("RV_UL_catalog", "", settings, "entries", settings, "index", rows=rows)
 
 
@@ -1478,7 +1513,7 @@ def draw_item_card(layout, context):
     settings = context.scene.rimvision
     record = selected(context)
     if record is None:
-        layout.label(text="Выберите предмет каталога")
+        layout.label(text="Select a catalog item")
         return
     box = layout.box()
     icon = preview_icon(record)
@@ -1487,53 +1522,54 @@ def draw_item_card(layout, context):
         row.alignment = "CENTER"
         row.template_icon(icon_value=icon, scale=7)
     box.label(text=record.get("label", record["defName"]), icon="OBJECT_DATA")
-    box.label(text=record["defName"])
+    box.label(text=record["defName"], translate=False)
     box.label(text=record.get("mod", ""))
     if record.get("inactiveContent"):
-        box.label(text="Мод / DLC выключен в игре", icon="INFO")
+        box.label(text="Mod / DLC is disabled in the game", icon="INFO")
     if record.get("previewNote"):
         box.label(text=record["previewNote"], icon="INFO")
-    box.label(text=str(record["width"]) + " × " + str(record["depth"]) + " клеток")
-    builtin = record.get("builtin3d") or ("Дверь" if record.get("door") else "Стена" if record["defName"] == "Wall" else "")
+    box.label(text=str(record["width"]) + " × " + str(record["depth"]) + " cells")
+    builtin = record.get("builtin3d") or ("Door" if record.get("door") else "Wall" if record["defName"] == "Wall" else "")
     if builtin:
         locked = record.get("builtin3dLocked") or record.get("door")
-        box.label(text="Встроенная 3D: " + builtin, icon="LOCKED" if locked else "MESH_CUBE")
+        box.label(text="Built-in 3D: " + builtin, icon="LOCKED" if locked else "MESH_CUBE")
         if locked:
-            box.label(text="Замена модели пока не поддерживается")
-            box.label(text="Геометрию создаёт отдельный рендер RimVision")
-            box.label(text="Экспорт XML не заменит её в игре", icon="INFO")
+            box.label(text="Model replacement is not supported yet")
+            box.label(text="RimVision uses a separate renderer for this geometry")
+            box.label(text="XML export does not replace it in the game", icon="INFO")
         else:
-            box.label(text="Встроенную геометрию можно заменить XML")
-            box.label(text="Готовый шаблон факела можно загрузить ниже" if record["defName"] == "TorchWallLamp" else "Исходная геометрия из кода не импортируется")
+            box.label(text="Built-in geometry can be replaced with XML")
+            box.label(text="Load the ready-made torch template below" if record["defName"] == "TorchWallLamp" else "Original code-generated geometry cannot be imported")
     if not icon:
-        box.label(text="Спрайт не найден", icon="IMAGE_DATA")
+        box.label(text="Sprite not found", icon="IMAGE_DATA")
         if record.get("texturePath"):
-            box.label(text="Обновите подготовку спрайтов", icon="INFO")
+            box.label(text="Prepare sprites again", icon="INFO")
         else:
-            box.label(text="В XML нет пути к отдельному спрайту", icon="INFO")
+            box.label(text="The XML has no path to a separate sprite", icon="INFO")
     if record.get("models"):
-        box.label(text="Найдена XML-модель — посмотрите её", icon="CHECKMARK")
-        box.label(text="Готовых моделей: " + str(len(record["models"])), icon="CHECKMARK")
-        box.prop(settings, "model_choice", text="Вариант")
-        box.operator("rimvision.create_template", text="Добавить готовую модель", icon="IMPORT")
+        box.label(text="XML model found — take a look", icon="CHECKMARK")
+        box.label(text="Ready models: " + str(len(record["models"])), icon="CHECKMARK")
+        box.prop(settings, "model_choice", text="Variant")
+        box.operator("rimvision.create_template", text="Add ready-made model", icon="IMPORT")
     else:
-        box.label(text="XML-модель не найдена")
-        box.operator("rimvision.create_template", text="Создать шаблон модели", icon="ADD")
+        box.label(text="XML model not found")
+        box.operator("rimvision.create_template", text="Create model template", icon="ADD")
     row = box.row(align=True)
     if record.get("models"):
-        row.operator("rimvision.create_template", text="Новая модель", icon="ADD").force_new = True
+        row.operator("rimvision.create_template", text="New model", icon="ADD").force_new = True
     row.operator("rimvision.import_model_file", text="XML…", icon="FILE_FOLDER")
 
 
 class RVBrowser(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.browse_catalog"
-    bl_label = "Каталог моделей RimVision"
+    bl_label = "RimVision model catalog"
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self, width=850)
+        return context.window_manager.invoke_props_dialog(self, width=850, title=tr(self.bl_label))
 
     def draw(self, context):
-        split = self.layout.split(factor=0.65)
+        split = ui(self.layout).split(factor=0.65)
         draw_catalog(split.column(), context, 15)
         draw_item_card(split.column(), context)
 
@@ -1561,16 +1597,17 @@ def startup_objects(scene):
 
 
 class RVAddEffect(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.add_effect"
-    bl_label = "Добавить точку эффекта"
+    bl_label = "Add effect point"
     bl_options = {"REGISTER", "UNDO"}
-    kind: EnumProperty(items=[("fire", "Огонь", ""), ("light", "Свет", "")], default="fire")
+    kind: EnumProperty(items=translated_items([("fire", "Fire", ""), ("light", "Light", "")]), default=0, translation_context=CONTEXT)
 
     def execute(self, context):
         record = selected(context)
         root = context.scene.rimvision.current_model
         if context.mode != "OBJECT" or record is None or root is None or root.get("rimvision_def") != record["defName"]:
-            self.report({"ERROR"}, "Сначала создайте или загрузите модель в Object Mode")
+            self.report({"ERROR"}, tr("Create or load a model in Object Mode first"))
             return {"CANCELLED"}
         try:
             marker = next((obj for obj in root.children_recursive if obj.get("rimvision_role") == "anchor" and obj.rimvision_effect.kind == self.kind), None)
@@ -1586,15 +1623,16 @@ class RVAddEffect(bpy.types.Operator):
                 context.space_data.shading.type = "MATERIAL"
                 context.space_data.shading.use_scene_lights = True
         except (OSError, ValueError, RuntimeError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVSelectEffect(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.select_effect"
-    bl_label = "Выбрать точку эффекта"
-    object_name: StringProperty()
+    bl_label = "Select effect point"
+    object_name: StringProperty(translation_context=CONTEXT)
 
     @classmethod
     def poll(cls, context):
@@ -1612,8 +1650,9 @@ class RVSelectEffect(bpy.types.Operator):
 
 
 class RVStartWork(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.start_work"
-    bl_label = "Начать работу"
+    bl_label = "Start working"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -1634,8 +1673,9 @@ class RVStartWork(bpy.types.Operator):
 
 
 class RVBackToSetup(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.back_to_setup"
-    bl_label = "Назад к подготовке игры"
+    bl_label = "Back to game setup"
 
     def execute(self, context):
         context.scene.rimvision.workflow_stage = "Setup"
@@ -1643,9 +1683,10 @@ class RVBackToSetup(bpy.types.Operator):
 
 
 class RVClearStartup(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.clear_startup"
-    bl_label = "Удалить куб, свет и камеру"
-    bl_description = "Удалить стартовые объекты и опустевшую базовую коллекцию; действие можно отменить через Ctrl+Z"
+    bl_label = "Remove cube, light and camera"
+    bl_description = "Remove startup objects and the empty default collection; undo with Ctrl+Z"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -1670,13 +1711,14 @@ class RVClearStartup(bpy.types.Operator):
                 bpy.data.collections.remove(collection)
         context.view_layer.update()
         reset_mesh_tracking()
-        self.report({"INFO"}, "Удалено стартовых объектов: " + str(removed))
+        self.report({"INFO"}, tr("Startup objects removed: " + str(removed)))
         return {"FINISHED"}
 
 
 class RVPreviewMaterial(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.preview_material"
-    bl_label = "Обновить материал в сцене"
+    bl_label = "Update scene material"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -1687,14 +1729,15 @@ class RVPreviewMaterial(bpy.types.Operator):
         try:
             material_preview(obj.active_material, record)
         except (OSError, RuntimeError, ValueError) as error:
-            self.report({"ERROR"}, str(error))
+            self.report({"ERROR"}, tr(str(error)))
             return {"CANCELLED"}
         return {"FINISHED"}
 
 
 class RVCleanResources(bpy.types.Operator):
+    bl_translation_context = CONTEXT
     bl_idname = "rimvision.clean_resources"
-    bl_label = "Навести порядок в ресурсах RimVision"
+    bl_label = "Clean up RimVision resources"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -1711,7 +1754,7 @@ class RVCleanResources(bpy.types.Operator):
         for material in bpy.data.materials:
             record = old_materials.get(re.sub(r"\.\d+$", "", material.name))
             if record is not None and material.library is None and material.rimvision.mode != "Object":
-                name_resource(material, record, "Материал")
+                name_resource(material, record, "Material")
             definition = material.get("rimvision_resource_def")
             record = definitions.get(definition)
             if record is not None:
@@ -1721,7 +1764,7 @@ class RVCleanResources(bpy.types.Operator):
                     for node in material.node_tree.nodes:
                         if (node.type == "TEX_IMAGE" and node.image and node.image.get("rimvision_atlas") and
                             (node.image.get("rimvision_auto_name") or node.image.name.startswith("RimVision atlas "))):
-                            name_resource(node.image, record, "Атлас 2×2")
+                            name_resource(node.image, record, "Atlas 2×2")
         for image in bpy.data.images:
             if image.library is not None or not image.filepath:
                 continue
@@ -1730,7 +1773,7 @@ class RVCleanResources(bpy.types.Operator):
                 record, direction = entry
                 actual = next((key for key, value in record.get("directionalSprites", {}).items()
                                if str(Path(value).resolve()).casefold() == str(Path(bpy.path.abspath(image.filepath)).resolve()).casefold()), "")
-                kind = {"North": "Север", "South": "Юг", "East": "Восток", "West": "Запад"}.get(actual, "Спрайт")
+                kind = {"North": "North", "South": "South", "East": "East", "West": "West"}.get(actual, "Sprite")
                 name_resource(image, record, kind)
         removed_materials, removed_images = 0, 0
         for material in list(bpy.data.materials):
@@ -1742,7 +1785,7 @@ class RVCleanResources(bpy.types.Operator):
             if managed and image.users == 0 and not image.use_fake_user and not image.is_dirty and image.library is None:
                 bpy.data.images.remove(image)
                 removed_images += 1
-        self.report({"INFO"}, "Удалено неиспользуемых материалов: " + str(removed_materials) + "; картинок: " + str(removed_images))
+        self.report({"INFO"}, tr("Unused materials removed: " + str(removed_materials) + "; images: " + str(removed_images)))
         return {"FINISHED"}
 
 
@@ -1760,22 +1803,22 @@ def draw_setup(layout, context):
     setup.enabled = _extracting is None
     workshop_found = bool(settings.workshop and Path(bpy.path.abspath(settings.workshop)).is_dir())
     config_found = bool(settings.config and Path(bpy.path.abspath(settings.config)).is_file())
-    setup.label(text="Игра найдена" if game_found else "Игра не найдена — укажите путь", icon="CHECKMARK" if game_found else "ERROR")
-    setup.label(text="Workshop найден" if workshop_found else "Workshop не найден", icon="CHECKMARK" if workshop_found else "INFO")
-    setup.label(text="Список активных модов найден" if config_found else "Список активных модов не найден", icon="CHECKMARK" if config_found else "INFO")
-    setup.label(text="Каталог загружен: " + str(len(_records)) + " предметов" if _records else "Каталог ещё не загружен", icon="CHECKMARK" if _records else "INFO")
+    setup.label(text="Game found" if game_found else "Game not found — select a path", icon="CHECKMARK" if game_found else "ERROR")
+    setup.label(text="Workshop found" if workshop_found else "Workshop not found", icon="CHECKMARK" if workshop_found else "INFO")
+    setup.label(text="Active mod list found" if config_found else "Active mod list not found", icon="CHECKMARK" if config_found else "INFO")
+    setup.label(text="Catalog loaded: " + str(len(_records)) + " items" if _records else "Catalog is not loaded yet", icon="CHECKMARK" if _records else "INFO")
     sprites_ready = settings.sprites_ready and settings.sprite_status_context == sprite_status_context(settings)
     if _extracting and _extracting._scene == context.scene:
-        setup.label(text="Спрайты подготавливаются…", icon="TIME")
+        setup.label(text="Preparing sprites…", icon="TIME")
     else:
-        setup.label(text="Спрайты подготовлены: " + str(settings.sprite_count) if sprites_ready else "Спрайты не подготовлены для текущих модов", icon="CHECKMARK" if sprites_ready else "INFO")
+        setup.label(text="Sprites prepared: " + str(settings.sprite_count) if sprites_ready else "Sprites are not prepared for the current mods", icon="CHECKMARK" if sprites_ready else "INFO")
     setup.operator("rimvision.find_game", icon="VIEWZOOM")
     setup.operator("rimvision.prepare_sprites", icon="IMAGE_DATA")
     setup.prop(settings, "advanced", icon="PREFERENCES")
     if settings.advanced:
         for prop in ("game", "workshop", "model_root", "config", "version", "active_only"):
             setup.prop(settings, prop)
-        setup.operator("rimvision.load_catalog", text="Перечитать папки", icon="FILE_REFRESH").source = "Files"
+        setup.operator("rimvision.load_catalog", text="Rescan folders", icon="FILE_REFRESH").source = "Files"
 
 
 def draw_addon_tools(layout, context):
@@ -1793,7 +1836,7 @@ def draw_addon_tools(layout, context):
             addon.label(text=found.origin + ": " + found.path, icon="FILE_FOLDER")
         addon.operator("rimvision.open_found_addon", icon="IMPORT")
     if settings.addon_path:
-        addon.label(text=settings.addon_name)
+        addon.label(text=settings.addon_name, translate=False)
         addon.prop(settings, "addon_metadata_options", icon="PREFERENCES")
         if settings.addon_metadata_options:
             addon.prop(settings, "addon_edit_name")
@@ -1806,23 +1849,24 @@ def draw_addon_tools(layout, context):
                         _previews.load(preview, preview, "IMAGE")
                     addon.template_icon(icon_value=_previews[preview].icon_id, scale=6)
                 except (OSError, RuntimeError, KeyError):
-                    addon.label(text="Не удалось показать превью", icon="ERROR")
+                    addon.label(text="Could not display the preview", icon="ERROR")
             addon.operator("rimvision.save_addon_metadata", icon="FILE_TICK")
         addon.label(text=bpy.path.abspath(settings.addon_path), icon="FILE_FOLDER")
 
 
 def draw_addon_models(layout, context):
     settings = context.scene.rimvision
-    layout.label(text=settings.addon_name, icon="OUTLINER_COLLECTION")
+    layout.label(text=settings.addon_name, icon="OUTLINER_COLLECTION", translate=False)
     layout.template_list("RV_UL_addon", "", settings, "addon_models", settings, "addon_index", rows=4)
     row = layout.row(align=True)
-    row.operator("rimvision.load_addon_model", text="Загрузить модель", icon="IMPORT")
+    row.operator("rimvision.load_addon_model", text="Load model", icon="IMPORT")
     row.operator("rimvision.refresh_addon", text="", icon="FILE_REFRESH")
-    layout.operator("rimvision.add_to_addon", text="Добавить выделенное в коллекцию", icon="ADD")
+    layout.operator("rimvision.add_to_addon", text="Add selection to collection", icon="ADD")
     layout.operator("rimvision.save_addon", icon="EXPORT")
 
 
 class RVPanel(bpy.types.Panel):
+    bl_translation_context = CONTEXT
     bl_label = "RimVision Models"
     bl_idname = "RIMVISION_PT_models"
     bl_space_type = "VIEW_3D"
@@ -1830,67 +1874,70 @@ class RVPanel(bpy.types.Panel):
     bl_category = "RimVision"
 
     def draw(self, context):
-        layout = self.layout
+        layout = ui(self.layout)
         settings = context.scene.rimvision
+        language_preferences = preferences()
+        if language_preferences:
+            layout.prop(language_preferences, "language")
         if settings.workflow_stage == "Auto" and not settings.addon_path and not settings.current_model and not any(obj.get("rimvision_def") for obj in context.scene.objects) and startup_objects(context.scene):
-            layout.label(text="Куб, камера и свет будут скрыты", icon="INFO")
+            layout.label(text="The cube, camera and light will be hidden", icon="INFO")
             row = layout.row()
             row.scale_y = 1.6
             row.operator("rimvision.start_work", icon="PLAY")
             if context.mode != "OBJECT":
-                layout.label(text="Перейдите в Object Mode", icon="INFO")
+                layout.label(text="Switch to Object Mode", icon="INFO")
             return
         if settings.workflow_stage == "Setup":
-            layout.label(text="1. Игра и спрайты", icon="VIEWZOOM")
+            layout.label(text="1. Game and sprites", icon="VIEWZOOM")
             draw_setup(layout.column(), context)
             layout.label(text=settings.status)
             if _extracting:
-                layout.label(text="Esc — отменить извлечение")
+                layout.label(text="Esc — cancel extraction")
             return
         if settings.workflow_stage == "Addons":
-            layout.label(text="2. Выберите или создайте аддон", icon="OUTLINER_COLLECTION")
+            layout.label(text="2. Select or create an addon", icon="OUTLINER_COLLECTION")
             draw_addon_tools(layout, context)
             layout.operator("rimvision.back_to_setup", icon="BACK")
             return
         game_found = bool(settings.game and (Path(bpy.path.abspath(settings.game)) / "Data/Core").is_dir())
-        layout.label(text="Игра найдена" if game_found else "Игра не найдена", icon="CHECKMARK" if game_found else "ERROR")
+        layout.label(text="Game found" if game_found else "Game not found", icon="CHECKMARK" if game_found else "ERROR")
         record = selected(context)
         if record:
             layout.label(text=record.get("label", record["defName"]), icon="OBJECT_DATA")
         layout.label(text=settings.status)
         if _extracting:
-            layout.label(text="Esc — отменить извлечение")
-        setup = foldout(layout, settings, "setup_options", "Игра и пути")
+            layout.label(text="Esc — cancel extraction")
+        setup = foldout(layout, settings, "setup_options", "Game and paths")
         if setup is not None:
             draw_setup(setup, context)
-        addon = foldout(layout, settings, "addon_options", "Аддон: " + settings.addon_name if settings.addon_path else "Аддон моделей")
+        addon = foldout(layout, settings, "addon_options", "Addon: " + settings.addon_name if settings.addon_path else "Model addon")
         if addon is not None:
             draw_addon_tools(addon, context)
         if settings.addon_path:
-            addon_models = foldout(layout, settings, "addon_models_options", "Модели аддона (" + str(len(settings.addon_models)) + ")")
+            addon_models = foldout(layout, settings, "addon_models_options", "Addon models (" + str(len(settings.addon_models)) + ")")
             if addon_models is not None:
                 draw_addon_models(addon_models, context)
-        catalog = foldout(layout, settings, "catalog_options", "Каталог (" + str(len(_records)) + ")")
+        catalog = foldout(layout, settings, "catalog_options", "Catalog (" + str(len(_records)) + ")")
         if catalog is not None:
-            catalog.operator("rimvision.browse_catalog", text="Открыть большой каталог", icon="VIEWZOOM")
+            catalog.operator("rimvision.browse_catalog", text="Open full catalog", icon="VIEWZOOM")
             draw_catalog(catalog, context, rows=4)
-        model = foldout(layout, settings, "model_options", "Текущая модель")
+        model = foldout(layout, settings, "model_options", "Current model")
         if model is not None:
             model.operator("rimvision.clear_startup", icon="TRASH")
             draw_item_card(model, context)
             model.prop(settings, "auto_attach_meshes")
             if settings.current_model:
-                model.label(text="Текущая модель: " + settings.current_model.name, icon="MESH_DATA")
+                model.label(text="Current model: " + settings.current_model.name, icon="MESH_DATA")
             else:
-                model.label(text="Создайте или загрузите модель для Shift+A", icon="INFO")
+                model.label(text="Create or load a model to use Shift+A", icon="INFO")
         material = context.object.active_material if context.object and context.object.type == "MESH" else None
-        box = foldout(layout, settings, "surface_options", "Материал и текстуры")
+        box = foldout(layout, settings, "surface_options", "Materials and textures")
         if box is not None:
             box.operator("rimvision.clean_resources", icon="BRUSH_DATA")
             if material is None:
-                box.label(text="Выберите меш с материалом", icon="INFO")
+                box.label(text="Select a mesh with a material", icon="INFO")
             else:
-                box.label(text=material.name)
+                box.label(text=material.name, translate=False)
                 surface = material.rimvision
                 box.prop(surface, "mode")
                 if surface.mode == "Solid":
@@ -1900,17 +1947,17 @@ class RVPanel(bpy.types.Panel):
                     box.prop(surface, "texture_path")
                     box.prop(surface, "use_uv")
                     box.prop(surface, "tint")
-                    box.label(text="Картинка сохранится в аддон как PNG")
+                    box.label(text="The image will be saved to the addon as PNG")
                 elif surface.mode == "Object":
-                    box.label(text="Цвет и картинка из Base Color материала")
-                    box.label(text="Используется UV-развёртка текстуры")
+                    box.label(text="Color and image from the material Base Color")
+                    box.label(text="Uses the texture UV map")
                     box.prop(surface, "tint")
                 elif surface.mode == "Atlas":
-                    box.label(text="Одна текстура 2×2 для всех ракурсов")
-                    box.label(text="Сверху: North | East")
-                    box.label(text="Снизу: South | West")
-                    box.label(text="Разместите UV на нужных тайлах")
-                    box.label(text="Атлас сохранится в аддон как PNG")
+                    box.label(text="One 2×2 texture for all views")
+                    box.label(text="Top: North | East")
+                    box.label(text="Bottom: South | West")
+                    box.label(text="Place UVs on the desired tiles")
+                    box.label(text="The atlas will be saved to the addon as PNG")
                     box.prop(surface, "tint")
                 else:
                     box.prop(surface, "direction")
@@ -1922,14 +1969,14 @@ class RVPanel(bpy.types.Panel):
                     box.prop(surface, prop)
                 if surface.mode != "Object":
                     box.operator("rimvision.preview_material")
-        effects = foldout(layout, settings, "effect_options", "Огонь и свет")
+        effects = foldout(layout, settings, "effect_options", "Fire and light")
         if effects is not None:
             row = effects.row(align=True)
             row.enabled = settings.current_model is not None
-            row.operator("rimvision.add_effect", text="🔥 Огонь", icon="MOD_FLUIDSIM").kind = "fire"
-            row.operator("rimvision.add_effect", text="💡 Свет", icon="LIGHT_DATA").kind = "light"
+            row.operator("rimvision.add_effect", text="🔥 Fire", icon="MOD_FLUIDSIM").kind = "fire"
+            row.operator("rimvision.add_effect", text="💡 Light", icon="LIGHT_DATA").kind = "light"
             if settings.current_model is None:
-                effects.label(text="Сначала создайте или загрузите модель", icon="INFO")
+                effects.label(text="Create or load a model first", icon="INFO")
             if settings.current_model:
                 for marker in settings.current_model.children_recursive:
                     if marker.get("rimvision_role") == "anchor" and marker.rimvision_effect.kind in ("fire", "light"):
@@ -1937,7 +1984,7 @@ class RVPanel(bpy.types.Panel):
             marker = context.object
             if marker and marker.get("rimvision_role") == "anchor" and marker.rimvision_effect.kind in ("fire", "light"):
                 effect = marker.rimvision_effect
-                effects.prop(marker, "location", text="Положение")
+                effects.prop(marker, "location", text="Position")
                 if effect.kind == "fire":
                     effects.prop(effect, "size")
                     effects.prop(effect, "always")
@@ -1945,35 +1992,35 @@ class RVPanel(bpy.types.Panel):
                     effects.prop(effect, "color")
                     effects.prop(effect, "intensity")
                     effects.prop(effect, "radius")
-                    effects.label(text="В игре нужен источник света у предмета", icon="INFO")
-                effects.label(text="Перемещайте точку через G; удаляйте через X")
-        reference = foldout(layout, settings, "reference_options", "Референс в сцене")
+                    effects.label(text="The in-game item must have a light source", icon="INFO")
+                effects.label(text="Move the point with G; delete with X")
+        reference = foldout(layout, settings, "reference_options", "Scene references")
         if reference is not None:
             reference.prop(settings, "auto_reference")
             reference.prop(settings, "reference_all_sides")
             manual = reference.column()
             manual.enabled = not settings.reference_all_sides
-            manual.prop(settings, "reference_direction", text="Вид")
-            manual.prop(settings, "reference_side", text="Сторона")
-            manual.prop(settings, "reference_rotation", text="Поворот XYZ")
+            manual.prop(settings, "reference_direction", text="View")
+            manual.prop(settings, "reference_side", text="Side")
+            manual.prop(settings, "reference_rotation", text="XYZ rotation")
             reference.prop(settings, "reference_gap")
-            reference.prop(settings, "reference_offset", text="Смещение")
+            reference.prop(settings, "reference_offset", text="Offset")
             reference.prop(settings, "reference_opacity", slider=True)
             reference.operator("rimvision.show_reference")
-        output = foldout(layout, settings, "export_options", "Сохранение и экспорт")
+        output = foldout(layout, settings, "export_options", "Save and export")
         if output is not None:
             if settings.addon_path:
-                output.label(text="Аддон: " + settings.addon_name)
+                output.label(text="Addon: " + settings.addon_name)
             else:
-                output.prop(settings, "output", text="Папка мода")
+                output.prop(settings, "output", text="Mod folder")
             if settings.advanced or settings.graphic_filter or settings.height_offset:
-                output.prop(settings, "graphic_filter", text="Фильтр графики")
-                output.prop(settings, "height_offset", text="Смещение высоты")
-            output.prop(settings, "overwrite", text="Заменить существующий XML")
-            output.operator("rimvision.export_model", text="Сохранить модель в аддон" if settings.addon_path else "Экспортировать модель", icon="EXPORT")
+                output.prop(settings, "graphic_filter", text="Graphic path filter")
+                output.prop(settings, "height_offset", text="Height offset")
+            output.prop(settings, "overwrite", text="Replace existing XML")
+            output.operator("rimvision.export_model", text="Save model to addon" if settings.addon_path else "Export model", icon="EXPORT")
 
 
-_classes = (RVEntry, RVAddonModel, RVFoundAddon, RVModEntry, RVEffectSettings, RVSettings, RVSurface, RV_UL_catalog, RV_UL_mod_filter, RVModFilterPanel, RV_UL_addon, RV_UL_found_addons, RVFindAddons, RVOpenFoundAddon, RVLoad, RVFind, RVPrepareSprites, RVReference,
+_classes = (RVPreferences, RVEntry, RVAddonModel, RVFoundAddon, RVModEntry, RVEffectSettings, RVSettings, RVSurface, RV_UL_catalog, RV_UL_mod_filter, RVModFilterPanel, RV_UL_addon, RV_UL_found_addons, RVFindAddons, RVOpenFoundAddon, RVLoad, RVFind, RVPrepareSprites, RVReference,
             RVImport, RVImportFile, RVTemplate, RVTexture, RVCreateAddon, RVOpenAddon, RVRefreshAddon, RVLoadAddonModel,
             RVEditAddonDescription, RVSaveAddonMetadata, RVExport, RVAddToAddon, RVSaveAddon, RVBrowser, RVAddEffect, RVSelectEffect, RVStartWork, RVBackToSetup, RVClearStartup, RVPreviewMaterial, RVCleanResources, RVPanel)
 
@@ -1984,6 +2031,12 @@ def initial_paths():
         return 0.1
     reset_mesh_tracking()
     for scene in scenes:
+        if not scene.rimvision.get("rimvision_filters_v2", False):
+            if scene.rimvision.get("models_only", False):
+                scene.rimvision.model_status = "Ready"
+            elif scene.rimvision.get("missing_models_only", False):
+                scene.rimvision.model_status = "Missing"
+            scene.rimvision["rimvision_filters_v2"] = True
         if scene.rimvision.addon_path and scene.rimvision.addon_description is None:
             try:
                 load_addon_metadata(scene.rimvision)
@@ -2002,16 +2055,17 @@ def initial_paths():
             refresh_sprite_status(scene.rimvision)
         except (OSError, ValueError, ET.ParseError, RuntimeError) as error:
             set_sprite_status(scene.rimvision, {}, {})
-            print("[RimVision] Спрайты: " + str(error))
+            print("[RimVision] Sprites: " + str(error))
 
 
 def register():
     global _previews
     for cls in _classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.rimvision = PointerProperty(type=RVSettings)
-    bpy.types.Material.rimvision = PointerProperty(type=RVSurface)
-    bpy.types.Object.rimvision_effect = PointerProperty(type=RVEffectSettings)
+    i18n.register()
+    bpy.types.Scene.rimvision = PointerProperty(type=RVSettings, translation_context=CONTEXT)
+    bpy.types.Material.rimvision = PointerProperty(type=RVSurface, translation_context=CONTEXT)
+    bpy.types.Object.rimvision_effect = PointerProperty(type=RVEffectSettings, translation_context=CONTEXT)
     _previews = bpy.utils.previews.new()
     _pending_meshes.clear()
     _known_meshes.clear()
@@ -2023,6 +2077,7 @@ def register():
 
 def unregister():
     global _previews
+    i18n.unregister()
     if track_new_meshes in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(track_new_meshes)
     for handlers in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post, bpy.app.handlers.load_post):
