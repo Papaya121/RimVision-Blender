@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 32),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 33),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -20,7 +20,7 @@ for _module_name in ("i18n", "addon", "catalog", "paths", "model", "sprites", "s
     if _module is not None:
         importlib.reload(_module)
 from . import i18n
-from .i18n import CONTEXT, language_changed, preferences, tr, translated_items, ui
+from .i18n import CONTEXT, language_changed, language_get, language_set, preferences, tr, translated_items, ui
 from .catalog import active_mods, discover, load_snapshot, scan, sprite_folders
 from .paths import find_installations
 from .scene_tools import create_effect_marker, frame_model, image_for, import_model, material_preview, name_material, name_resource, object_surface, prepare_texture, refresh_model_textures, show_catalog_models, show_reference, sprite_path
@@ -314,9 +314,10 @@ class RVModEntry(bpy.types.PropertyGroup):
 
 class RVPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
+    language_index: IntProperty(default=0, min=0, max=2, options={"HIDDEN"}, translation_context=CONTEXT)
     language: EnumProperty(name="Language", description="Use Blender's language, or choose the addon interface language",
         items=translated_items([("AUTO", "Blender language", "", 0, 0), ("EN", "English", "", 0, 1), ("RU", "Русский", "", 0, 2)]),
-        default=0, update=language_changed, translation_context=CONTEXT)
+        default=0, get=language_get, set=language_set, update=language_changed, translation_context=CONTEXT)
 
     def draw(self, context):
         ui(self.layout).prop(self, "language")

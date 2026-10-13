@@ -19,7 +19,7 @@ def preferences():
 
 def language():
     settings = preferences()
-    choice = settings.get("language", 0) if settings else 0
+    choice = settings.language_index if settings else 0
     choice = {0: "AUTO", 1: "EN", 2: "RU"}.get(choice, choice)
     if choice != "AUTO":
         return choice
@@ -66,7 +66,7 @@ def register():
     except ValueError:
         pass
     settings = preferences()
-    choice = settings.get("language", 0) if settings else 0
+    choice = settings.language_index if settings else 0
     automatic = choice in (0, "AUTO")
     english = {(CONTEXT, key): key for key in MESSAGES}
     russian = {(CONTEXT, key): value for key, value in MESSAGES.items()}
@@ -76,8 +76,19 @@ def register():
 
 
 def unregister():
-    bpy.app.translations.unregister(__name__)
+    try:
+        bpy.app.translations.unregister(__name__)
+    except ValueError:
+        pass
     _enum_cache.clear()
+
+
+def language_get(self):
+    return self.language_index
+
+
+def language_set(self, value):
+    self.language_index = value
 
 
 def language_changed(self, context):
