@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 25),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 26),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -315,6 +315,7 @@ class RVSettings(bpy.types.PropertyGroup):
     advanced: BoolProperty(name="Пути и дополнительные настройки")
     surface_options: BoolProperty(name="Настройки активного материала")
     addon_options: BoolProperty(name="Аддон")
+    addon_models_options: BoolProperty(name="Модели аддона", default=True)
     setup_options: BoolProperty(name="Игра и пути")
     catalog_options: BoolProperty(name="Каталог")
     model_options: BoolProperty(name="Текущая модель")
@@ -1734,12 +1735,17 @@ def draw_addon_tools(layout, context):
                     addon.label(text="Не удалось показать превью", icon="ERROR")
             addon.operator("rimvision.save_addon_metadata", icon="FILE_TICK")
         addon.label(text=bpy.path.abspath(settings.addon_path), icon="FILE_FOLDER")
-        addon.template_list("RV_UL_addon", "", settings, "addon_models", settings, "addon_index", rows=4)
-        row = addon.row(align=True)
-        row.operator("rimvision.load_addon_model", text="Загрузить модель", icon="IMPORT")
-        row.operator("rimvision.refresh_addon", text="", icon="FILE_REFRESH")
-        addon.operator("rimvision.add_to_addon", text="Добавить выделенное в коллекцию", icon="ADD")
-        addon.operator("rimvision.save_addon", icon="EXPORT")
+
+
+def draw_addon_models(layout, context):
+    settings = context.scene.rimvision
+    layout.label(text=settings.addon_name, icon="OUTLINER_COLLECTION")
+    layout.template_list("RV_UL_addon", "", settings, "addon_models", settings, "addon_index", rows=4)
+    row = layout.row(align=True)
+    row.operator("rimvision.load_addon_model", text="Загрузить модель", icon="IMPORT")
+    row.operator("rimvision.refresh_addon", text="", icon="FILE_REFRESH")
+    layout.operator("rimvision.add_to_addon", text="Добавить выделенное в коллекцию", icon="ADD")
+    layout.operator("rimvision.save_addon", icon="EXPORT")
 
 
 class RVPanel(bpy.types.Panel):
@@ -1780,6 +1786,10 @@ class RVPanel(bpy.types.Panel):
         layout.label(text=settings.status)
         if _extracting:
             layout.label(text="Esc — отменить извлечение")
+        if settings.addon_path:
+            addon_models = foldout(layout, settings, "addon_models_options", "Модели аддона (" + str(len(settings.addon_models)) + ")")
+            if addon_models is not None:
+                draw_addon_models(addon_models, context)
         addon = foldout(layout, settings, "addon_options", "Аддон: " + settings.addon_name if settings.addon_path else "Аддон моделей")
         if addon is not None:
             draw_addon_tools(addon, context)
