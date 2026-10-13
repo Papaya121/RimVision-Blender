@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 26),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 27),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -149,6 +149,20 @@ def refresh(self, context):
         self.model_choice = str(defaults[-1] if defaults else len(models) - 1)
 
 
+def mod_filter_changed(self, context):
+    index = next((i for i, entry in enumerate(self.mod_entries) if entry.name == self.mod_filter), 0)
+    if self.mod_index != index:
+        self.mod_index = index
+    refresh(self, context)
+
+
+def mod_index_changed(self, context):
+    if not _loading and 0 <= self.mod_index < len(self.mod_entries):
+        package = self.mod_entries[self.mod_index].name
+        if self.mod_filter != package:
+            self.mod_filter = package
+
+
 def ready_filter_changed(self, context):
     if self.models_only and self.missing_models_only:
         self.missing_models_only = False
@@ -285,6 +299,11 @@ class RVFoundAddon(bpy.types.PropertyGroup):
     origin: StringProperty()
 
 
+class RVModEntry(bpy.types.PropertyGroup):
+    label: StringProperty()
+    inactive: BoolProperty()
+
+
 def effect_changed(self, context):
     obj = self.id_data
     if obj.type == "LIGHT" and self.kind == "light":
@@ -322,7 +341,9 @@ class RVSettings(bpy.types.PropertyGroup):
     reference_options: BoolProperty(name="Референс")
     effect_options: BoolProperty(name="Огонь и свет")
     export_options: BoolProperty(name="Сохранение и экспорт")
-    mod_filter: EnumProperty(name="Мод", items=lambda self, context: _mod_items, update=refresh)
+    mod_filter: EnumProperty(name="Мод", items=lambda self, context: _mod_items, update=mod_filter_changed)
+    mod_entries: CollectionProperty(type=RVModEntry)
+    mod_index: IntProperty(update=mod_index_changed)
     models_only: BoolProperty(name="Только с готовой моделью", update=ready_filter_changed)
     missing_models_only: BoolProperty(name="Только без готовой модели", update=missing_filter_changed)
     model_choice: EnumProperty(name="Модель", items=model_items)
@@ -382,17 +403,45 @@ class RV_UL_catalog(bpy.types.UIList):
         record = _records[item.record_index] if item.record_index < len(_records) else {}
         icon_id = preview_icon(record) if record else 0
         row = layout.row()
+        row.active = not record.get("inactiveContent", False)
         if icon_id:
             row.label(text=item.label, icon_value=icon_id)
         else:
             row.label(text=item.label, icon="MESH_CUBE")
         row.label(text=item.name)
+        if record.get("inactiveContent"):
+            row.label(text="Выкл.", icon="CHECKBOX_DEHLT")
         if record.get("builtin3dLocked") or record.get("door"):
             row.label(text="3D • замена недоступна", icon="LOCKED")
         elif record.get("models"):
             row.label(text="Кастомная 3D", icon="CHECKMARK")
         elif record.get("builtin3d") or record.get("defName") == "Wall":
             row.label(text="Встроенная 3D", icon="MESH_CUBE")
+
+
+class RV_UL_mod_filter(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row()
+        row.active = not item.inactive
+        row.label(text=item.label, icon="CHECKBOX_DEHLT" if item.inactive else "CHECKBOX_HLT")
+        if item.inactive:
+            row.label(text="Выкл.")
+
+
+class RVModFilterPanel(bpy.types.Panel):
+    bl_label = "Мод"
+    bl_idname = "RIMVISION_PT_mod_filter"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_options = {"INSTANCED"}
+    bl_ui_units_x = 20
+
+    def draw(self, context):
+        settings = context.scene.rimvision
+        if settings.mod_entries:
+            self.layout.template_list("RV_UL_mod_filter", "", settings, "mod_entries", settings, "mod_index", rows=min(len(settings.mod_entries), 12))
+        else:
+            self.layout.label(text="Сначала загрузите каталог")
 
 
 class RVLoad(bpy.types.Operator):
@@ -432,6 +481,7 @@ class RVLoad(bpy.types.Operator):
                 for warning in warnings:
                     print("[RimVision] " + warning)
             _records = records
+            inactive_packages = {record.get("packageId") for record in records if record.get("inactiveContent", False)}
             mods = {r.get("packageId", ""): r.get("mod", "") for r in records}
             _mod_items = [("All", "Все моды", "")] + [(package, name or package, package) for package, name in sorted(mods.items(), key=lambda p: p[1].casefold()) if package]
             _model_items = {r["defName"]: [(str(i), (m["filter"] or "Основная") + " • " + m["mod"], m["file"], i) for i, m in enumerate(r.get("models", []))] for r in records if r.get("models")}
@@ -439,6 +489,12 @@ class RVLoad(bpy.types.Operator):
             _loading = True
             try:
                 for scene in bpy.data.scenes:
+                    scene.rimvision.mod_entries.clear()
+                    for package, name, _ in _mod_items:
+                        entry = scene.rimvision.mod_entries.add()
+                        entry.name, entry.label = package, name
+                        entry.inactive = package in inactive_packages
+                    scene.rimvision.mod_index = 0
                     scene.rimvision.mod_filter = "All"
                     refresh(scene.rimvision, context)
                     scene.rimvision.status = status
@@ -1394,7 +1450,8 @@ def draw_catalog(layout, context, rows=7):
     layout.prop(settings, "search", text="Поиск", icon="VIEWZOOM")
     row = layout.row(align=True)
     row.prop(settings, "category", text="Тип")
-    row.prop(settings, "mod_filter", text="")
+    caption = next((entry.label + (" · выкл." if entry.inactive else "") for entry in settings.mod_entries if entry.name == settings.mod_filter), "Все моды")
+    row.popover(panel="RIMVISION_PT_mod_filter", text=caption)
     layout.prop(settings, "models_only")
     layout.prop(settings, "missing_models_only")
     layout.template_list("RV_UL_catalog", "", settings, "entries", settings, "index", rows=rows)
@@ -1899,7 +1956,7 @@ class RVPanel(bpy.types.Panel):
             output.operator("rimvision.export_model", text="Сохранить модель в аддон" if settings.addon_path else "Экспортировать модель", icon="EXPORT")
 
 
-_classes = (RVEntry, RVAddonModel, RVFoundAddon, RVEffectSettings, RVSettings, RVSurface, RV_UL_catalog, RV_UL_addon, RV_UL_found_addons, RVFindAddons, RVOpenFoundAddon, RVLoad, RVFind, RVPrepareSprites, RVReference,
+_classes = (RVEntry, RVAddonModel, RVFoundAddon, RVModEntry, RVEffectSettings, RVSettings, RVSurface, RV_UL_catalog, RV_UL_mod_filter, RVModFilterPanel, RV_UL_addon, RV_UL_found_addons, RVFindAddons, RVOpenFoundAddon, RVLoad, RVFind, RVPrepareSprites, RVReference,
             RVImport, RVImportFile, RVTemplate, RVTexture, RVCreateAddon, RVOpenAddon, RVRefreshAddon, RVLoadAddonModel,
             RVEditAddonDescription, RVSaveAddonMetadata, RVExport, RVAddToAddon, RVSaveAddon, RVBrowser, RVAddEffect, RVSelectEffect, RVStartWork, RVBackToSetup, RVClearStartup, RVPreviewMaterial, RVCleanResources, RVPanel)
 
