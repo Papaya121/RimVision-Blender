@@ -121,7 +121,8 @@ class Layout:
             if name in ("label", "prop", "prop_search", "operator", "popover", "menu"):
                 translate = kwargs.get("translate", True)
                 if "text" not in kwargs and name in ("prop", "prop_search"):
-                    kwargs["text"] = args[0].bl_rna.properties[args[1]].name
+                    data = args[0].properties if isinstance(args[0], bpy.types.Operator) else args[0]
+                    kwargs["text"] = data.bl_rna.properties[args[1]].name
                 if "text" not in kwargs and name == "operator":
                     module, operator = args[0].split(".", 1)
                     kwargs["text"] = getattr(getattr(bpy.ops, module), operator).get_rna_type().name
