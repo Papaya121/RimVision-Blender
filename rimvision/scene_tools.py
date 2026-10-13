@@ -265,6 +265,20 @@ def show_catalog_models(context, record):
         context.scene.rimvision.height_offset = obj.get("rimvision_height_offset", 0.0)
 
 
+def reference_bottom_padding(image):
+    cached = image.get("rimvision_reference_padding")
+    if cached is not None and not image.is_dirty:
+        return cached
+    width, height = image.size
+    if min(width, height) <= 0:
+        return 0
+    pixels = array("f", [0]) * (width * height * 4)
+    image.pixels.foreach_get(pixels)
+    padding = next(((index // 4 // width) / height for index in range(3, len(pixels), 4) if pixels[index] >= .25), 0)
+    image["rimvision_reference_padding"] = padding
+    return padding
+
+
 def show_reference(scene, record):
     collection = guides(scene)
     for obj in list(collection.objects):
@@ -342,12 +356,22 @@ def show_reference(scene, record):
         reference.empty_display_type = "IMAGE"
         reference.data = image
         reference.empty_display_size = max(width, depth, 1)
+        sized_plant = record.get("category") == "Plant" and record.get("referenceWidth") and record.get("referenceHeight") and min(image.size) > 0
+        padding_height = 0
+        if sized_plant:
+            reference.empty_display_size = max(record["referenceWidth"], record["referenceHeight"])
+            longest = max(*image.size, 1)
+            reference.scale.x = record["referenceWidth"] / (reference.empty_display_size * image.size[0] / longest)
+            reference.scale.y = record["referenceHeight"] / (reference.empty_display_size * image.size[1] / longest)
+            padding_height = record["referenceHeight"] * reference_bottom_padding(image)
         reference.empty_image_depth = "BACK"
         reference.empty_image_side = "DOUBLE_SIDED"
         reference.use_empty_image_alpha = True
         reference.color = (1, 1, 1, scene.rimvision.reference_opacity)
         reference.rotation_euler = settings.reference_rotation
         half = reference.empty_display_size / 2
+        if sized_plant:
+            half = record["referenceHeight"] / 2
         gap = settings.reference_gap
         position = {
             "Right": (width / 2 + half + gap, 0, half),
@@ -358,7 +382,7 @@ def show_reference(scene, record):
             "Below": (0, 0, -half - gap),
         }[settings.reference_side]
         if direction:
-            half_height = reference.empty_display_size * image.size[1] / max(*image.size, 1) / 2
+            half_height = reference.empty_display_size * image.size[1] / max(*image.size, 1) * reference.scale.y / 2
             position, angle = {
                 "South": ((0, -depth / 2 - gap, half_height), math.pi),
                 "North": ((0, depth / 2 + gap, half_height), 0),
@@ -366,9 +390,11 @@ def show_reference(scene, record):
                 "West": ((width / 2 + gap, 0, half_height), -math.pi / 2),
             }[direction]
             reference.rotation_euler = (math.pi / 2, 0, angle)
-            reference.scale.x = -1 if mirrored else 1
+            reference.scale.x *= -1 if mirrored else 1
             reference.empty_image_side = "FRONT"
         reference.location = tuple(value + offset for value, offset in zip(position, settings.reference_offset))
+        if sized_plant:
+            reference.location.z -= padding_height
         reference.hide_select = reference.hide_render = True
         reference["rimvision_guide"] = True
 

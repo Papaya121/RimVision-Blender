@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import xml.etree.ElementTree as ET
 from collections import ChainMap
 from pathlib import Path
@@ -234,6 +235,28 @@ def scan(game, workshop=None, version="1.6", cached=None, config=None, active_on
                           animal=text(resolved, "category") == "Pawn" and resolved.find("race") is not None and text(resolved, "race/intelligence", "Animal") == "Animal",
                           door="Building_Door" in text(resolved, "thingClass"),
                           models=models.get(text(resolved, "defName"), []))
+            if record["category"] == "Plant":
+                draw = text(resolved, "graphicData/drawSize", "1").strip("()").split(",")
+                draw_x, draw_y = float(draw[0]), float(draw[-1])
+                size_range = text(resolved, "plant/visualSizeRange")
+                maximum = float(size_range.split("~")[-1]) if size_range else float(text(resolved, "plant/visualSizeRange/max", "1"))
+                if any(not math.isfinite(value) or value <= 0 for value in (draw_x, draw_y, maximum)):
+                    raise ValueError("Invalid plant reference size")
+                adult_scale = max(.001, draw_x * maximum)
+                tree = text(resolved, "plant/treeCategory", "None") != "None"
+                grass = "grass" in record["defName"].lower()
+                if tree:
+                    reference_width = max(1.2, min(draw_x * 2.3, 6))
+                    reference_height = max(2, min(draw_y * 3.5, 9))
+                else:
+                    plant_scale = 1.2 if grass else 1.6
+                    reference_width = max(.12, min(draw_x * (.45 if grass else .8), 1.4)) * plant_scale
+                    reference_height = max(.08, min(draw_y * (.16 if grass else .4), .32 if grass else .85)) * plant_scale
+                    if not grass:
+                        reference_height *= .9
+                        reference_width = reference_height * draw_x / max(draw_y, .001)
+                record["referenceWidth"] = reference_width / adult_scale
+                record["referenceHeight"] = reference_height / adult_scale
             if record["category"] == "Pawn" and not record["texturePath"]:
                 candidates = pawn_graphics.get(record["defName"], [])
                 matching = [entry for entry in candidates if entry[0].lower() == package.lower()]
@@ -315,6 +338,9 @@ def load_snapshot(file):
                 raise ValueError("Invalid catalog text field")
         if not isinstance(record.get("door", False), bool):
             raise ValueError("Invalid door flag")
+        for key in ("referenceWidth", "referenceHeight"):
+            if key in record and (not isinstance(record[key], (int, float)) or not math.isfinite(record[key]) or record[key] <= 0):
+                raise ValueError("Invalid reference size")
         if not isinstance(record.get("animal", False), bool):
             raise ValueError("Invalid animal flag")
         for direction in ("North", "East", "South", "West"):
