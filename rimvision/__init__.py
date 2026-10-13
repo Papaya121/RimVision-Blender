@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 34),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 35),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -35,6 +35,7 @@ _empty_model_items = [("None", "No models found", "")]
 _file_model_items = [("0", "Default model", "")]
 _extracting = None
 _loading = False
+_restoring_scene = False
 _known_meshes = {}
 _pending_meshes = []
 _directions = [(value, value, "") for value in ("Thing", "North", "East", "South", "West")]
@@ -78,7 +79,25 @@ def reset_mesh_tracking(*args):
 
 
 @bpy.app.handlers.persistent
+def begin_scene_restore(*args):
+    global _restoring_scene
+    _restoring_scene = True
+    _pending_meshes.clear()
+
+
+@bpy.app.handlers.persistent
+def finish_scene_restore(*args):
+    global _restoring_scene
+    try:
+        reset_mesh_tracking()
+    finally:
+        _restoring_scene = False
+
+
+@bpy.app.handlers.persistent
 def track_new_meshes(scene, depsgraph):
+    if _restoring_scene:
+        return
     previous = _known_meshes.get(scene.as_pointer())
     count = len(scene.objects)
     if previous is not None and previous[0] == count:
@@ -105,6 +124,8 @@ def track_new_meshes(scene, depsgraph):
 
 
 def attach_new_meshes():
+    if _restoring_scene:
+        return 0.1 if _pending_meshes else None
     if bpy.context.mode != "OBJECT":
         return 0.1 if _pending_meshes else None
     pending = list(_pending_meshes)
@@ -137,6 +158,8 @@ def attach_new_meshes():
 
 
 def refresh(self, context):
+    if _restoring_scene:
+        return
     self.entries.clear()
     needle = self.search.casefold()
     content_state, model_status = self.content_state, self.model_status
@@ -172,6 +195,8 @@ def refresh(self, context):
 
 
 def mod_filter_changed(self, context):
+    if _restoring_scene:
+        return
     index = next((i for i, entry in enumerate(self.mod_entries) if entry.name == self.mod_filter), 0)
     if self.mod_index != index:
         self.mod_index = index
@@ -179,14 +204,14 @@ def mod_filter_changed(self, context):
 
 
 def mod_index_changed(self, context):
-    if not _loading and 0 <= self.mod_index < len(self.mod_entries):
+    if not _loading and not _restoring_scene and 0 <= self.mod_index < len(self.mod_entries):
         package = self.mod_entries[self.mod_index].name
         if self.mod_filter != package:
             self.mod_filter = package
 
 
 def selection_changed(self, context):
-    if _loading or not self.auto_reference or context is None or context.scene != self.id_data or self.workflow_stage in ("Setup", "Addons"):
+    if _loading or _restoring_scene or not self.auto_reference or context is None or context.scene != self.id_data or self.workflow_stage in ("Setup", "Addons"):
         return
     record = selected(context)
     if record:
@@ -197,7 +222,7 @@ def selection_changed(self, context):
 
 
 def reference_transform_changed(self, context):
-    if _loading or context is None or context.scene != self.id_data:
+    if _loading or _restoring_scene or context is None or context.scene != self.id_data:
         return
     if not self.auto_reference and (self.guides is None or not any(obj and obj.type == "EMPTY" and obj.get("rimvision_guide") for obj in self.guides.objects)):
         return
@@ -210,6 +235,8 @@ def reference_transform_changed(self, context):
 
 
 def index_changed(self, context):
+    if _restoring_scene:
+        return
     if not _loading and context and context.scene == self.id_data:
         record = selected(context)
         active = context.view_layer.objects.active
@@ -324,6 +351,8 @@ class RVPreferences(bpy.types.AddonPreferences):
 
 
 def effect_changed(self, context):
+    if _restoring_scene:
+        return
     obj = self.id_data
     if obj.type == "LIGHT" and self.kind == "light":
         obj.data.color = self.color
@@ -2071,8 +2100,10 @@ def register():
     _pending_meshes.clear()
     _known_meshes.clear()
     bpy.app.handlers.depsgraph_update_post.append(track_new_meshes)
+    for handlers in (bpy.app.handlers.undo_pre, bpy.app.handlers.redo_pre):
+        handlers.append(begin_scene_restore)
     for handlers in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post, bpy.app.handlers.load_post):
-        handlers.append(reset_mesh_tracking)
+        handlers.append(finish_scene_restore)
     bpy.app.timers.register(initial_paths, first_interval=0.0)
 
 
@@ -2081,9 +2112,12 @@ def unregister():
     i18n.unregister()
     if track_new_meshes in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(track_new_meshes)
+    for handlers in (bpy.app.handlers.undo_pre, bpy.app.handlers.redo_pre):
+        if begin_scene_restore in handlers:
+            handlers.remove(begin_scene_restore)
     for handlers in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post, bpy.app.handlers.load_post):
-        if reset_mesh_tracking in handlers:
-            handlers.remove(reset_mesh_tracking)
+        if finish_scene_restore in handlers:
+            handlers.remove(finish_scene_restore)
     if bpy.app.timers.is_registered(attach_new_meshes):
         bpy.app.timers.unregister(attach_new_meshes)
     _pending_meshes.clear()
