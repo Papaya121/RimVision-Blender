@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 27),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 28),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -1843,16 +1843,16 @@ class RVPanel(bpy.types.Panel):
         layout.label(text=settings.status)
         if _extracting:
             layout.label(text="Esc — отменить извлечение")
+        setup = foldout(layout, settings, "setup_options", "Игра и пути")
+        if setup is not None:
+            draw_setup(setup, context)
+        addon = foldout(layout, settings, "addon_options", "Аддон: " + settings.addon_name if settings.addon_path else "Аддон моделей")
+        if addon is not None:
+            draw_addon_tools(addon, context)
         if settings.addon_path:
             addon_models = foldout(layout, settings, "addon_models_options", "Модели аддона (" + str(len(settings.addon_models)) + ")")
             if addon_models is not None:
                 draw_addon_models(addon_models, context)
-        addon = foldout(layout, settings, "addon_options", "Аддон: " + settings.addon_name if settings.addon_path else "Аддон моделей")
-        if addon is not None:
-            draw_addon_tools(addon, context)
-        setup = foldout(layout, settings, "setup_options", "Игра и пути")
-        if setup is not None:
-            draw_setup(setup, context)
         catalog = foldout(layout, settings, "catalog_options", "Каталог (" + str(len(_records)) + ")")
         if catalog is not None:
             catalog.operator("rimvision.browse_catalog", text="Открыть большой каталог", icon="VIEWZOOM")
@@ -1866,44 +1866,6 @@ class RVPanel(bpy.types.Panel):
                 model.label(text="Текущая модель: " + settings.current_model.name, icon="MESH_DATA")
             else:
                 model.label(text="Создайте или загрузите модель для Shift+A", icon="INFO")
-        reference = foldout(layout, settings, "reference_options", "Референс в сцене")
-        if reference is not None:
-            reference.prop(settings, "auto_reference")
-            reference.prop(settings, "reference_all_sides")
-            manual = reference.column()
-            manual.enabled = not settings.reference_all_sides
-            manual.prop(settings, "reference_direction", text="Вид")
-            manual.prop(settings, "reference_side", text="Сторона")
-            manual.prop(settings, "reference_rotation", text="Поворот XYZ")
-            reference.prop(settings, "reference_gap")
-            reference.prop(settings, "reference_offset", text="Смещение")
-            reference.prop(settings, "reference_opacity", slider=True)
-            reference.operator("rimvision.show_reference")
-        effects = foldout(layout, settings, "effect_options", "Огонь и свет")
-        if effects is not None:
-            row = effects.row(align=True)
-            row.enabled = settings.current_model is not None
-            row.operator("rimvision.add_effect", text="🔥 Огонь", icon="MOD_FLUIDSIM").kind = "fire"
-            row.operator("rimvision.add_effect", text="💡 Свет", icon="LIGHT_DATA").kind = "light"
-            if settings.current_model is None:
-                effects.label(text="Сначала создайте или загрузите модель", icon="INFO")
-            if settings.current_model:
-                for marker in settings.current_model.children_recursive:
-                    if marker.get("rimvision_role") == "anchor" and marker.rimvision_effect.kind in ("fire", "light"):
-                        effects.operator("rimvision.select_effect", text=marker.name, icon="LIGHT_DATA" if marker.rimvision_effect.kind == "light" else "MOD_FLUIDSIM").object_name = marker.name
-            marker = context.object
-            if marker and marker.get("rimvision_role") == "anchor" and marker.rimvision_effect.kind in ("fire", "light"):
-                effect = marker.rimvision_effect
-                effects.prop(marker, "location", text="Положение")
-                if effect.kind == "fire":
-                    effects.prop(effect, "size")
-                    effects.prop(effect, "always")
-                else:
-                    effects.prop(effect, "color")
-                    effects.prop(effect, "intensity")
-                    effects.prop(effect, "radius")
-                    effects.label(text="В игре нужен источник света у предмета", icon="INFO")
-                effects.label(text="Перемещайте точку через G; удаляйте через X")
         material = context.object.active_material if context.object and context.object.type == "MESH" else None
         box = foldout(layout, settings, "surface_options", "Материал и текстуры")
         if box is not None:
@@ -1954,6 +1916,44 @@ class RVPanel(bpy.types.Panel):
                 output.prop(settings, "height_offset", text="Смещение высоты")
             output.prop(settings, "overwrite", text="Заменить существующий XML")
             output.operator("rimvision.export_model", text="Сохранить модель в аддон" if settings.addon_path else "Экспортировать модель", icon="EXPORT")
+        effects = foldout(layout, settings, "effect_options", "Огонь и свет")
+        if effects is not None:
+            row = effects.row(align=True)
+            row.enabled = settings.current_model is not None
+            row.operator("rimvision.add_effect", text="🔥 Огонь", icon="MOD_FLUIDSIM").kind = "fire"
+            row.operator("rimvision.add_effect", text="💡 Свет", icon="LIGHT_DATA").kind = "light"
+            if settings.current_model is None:
+                effects.label(text="Сначала создайте или загрузите модель", icon="INFO")
+            if settings.current_model:
+                for marker in settings.current_model.children_recursive:
+                    if marker.get("rimvision_role") == "anchor" and marker.rimvision_effect.kind in ("fire", "light"):
+                        effects.operator("rimvision.select_effect", text=marker.name, icon="LIGHT_DATA" if marker.rimvision_effect.kind == "light" else "MOD_FLUIDSIM").object_name = marker.name
+            marker = context.object
+            if marker and marker.get("rimvision_role") == "anchor" and marker.rimvision_effect.kind in ("fire", "light"):
+                effect = marker.rimvision_effect
+                effects.prop(marker, "location", text="Положение")
+                if effect.kind == "fire":
+                    effects.prop(effect, "size")
+                    effects.prop(effect, "always")
+                else:
+                    effects.prop(effect, "color")
+                    effects.prop(effect, "intensity")
+                    effects.prop(effect, "radius")
+                    effects.label(text="В игре нужен источник света у предмета", icon="INFO")
+                effects.label(text="Перемещайте точку через G; удаляйте через X")
+        reference = foldout(layout, settings, "reference_options", "Референс в сцене")
+        if reference is not None:
+            reference.prop(settings, "auto_reference")
+            reference.prop(settings, "reference_all_sides")
+            manual = reference.column()
+            manual.enabled = not settings.reference_all_sides
+            manual.prop(settings, "reference_direction", text="Вид")
+            manual.prop(settings, "reference_side", text="Сторона")
+            manual.prop(settings, "reference_rotation", text="Поворот XYZ")
+            reference.prop(settings, "reference_gap")
+            reference.prop(settings, "reference_offset", text="Смещение")
+            reference.prop(settings, "reference_opacity", slider=True)
+            reference.operator("rimvision.show_reference")
 
 
 _classes = (RVEntry, RVAddonModel, RVFoundAddon, RVModEntry, RVEffectSettings, RVSettings, RVSurface, RV_UL_catalog, RV_UL_mod_filter, RVModFilterPanel, RV_UL_addon, RV_UL_found_addons, RVFindAddons, RVOpenFoundAddon, RVLoad, RVFind, RVPrepareSprites, RVReference,
