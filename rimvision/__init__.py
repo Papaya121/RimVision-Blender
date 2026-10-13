@@ -1,4 +1,4 @@
-bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 29),
+bl_info = {"name": "RimVision Model Tools", "author": "RimVision", "version": (0, 4, 30),
            "blender": (4, 2, 0), "location": "View3D > Sidebar > RimVision", "category": "Import-Export"}
 
 import importlib
@@ -36,6 +36,17 @@ _loading = False
 _known_meshes = {}
 _pending_meshes = []
 _directions = [(value, value, "") for value in ("Thing", "North", "East", "South", "West")]
+_section_properties = ("setup_options", "addon_options", "addon_models_options", "catalog_options", "model_options",
+                       "surface_options", "effect_options", "reference_options", "export_options")
+
+
+def section_changed(prop):
+    def update(self, context):
+        if getattr(self, prop):
+            for other in _section_properties:
+                if other != prop and getattr(self, other):
+                    setattr(self, other, False)
+    return update
 
 
 def selection_record(settings):
@@ -332,15 +343,15 @@ class RVSettings(bpy.types.PropertyGroup):
     config: StringProperty(name="ModsConfig.xml", subtype="FILE_PATH")
     active_only: BoolProperty(name="Только активные моды", default=False)
     advanced: BoolProperty(name="Пути и дополнительные настройки")
-    surface_options: BoolProperty(name="Настройки активного материала")
-    addon_options: BoolProperty(name="Аддон")
-    addon_models_options: BoolProperty(name="Модели аддона", default=True)
-    setup_options: BoolProperty(name="Игра и пути")
-    catalog_options: BoolProperty(name="Каталог")
-    model_options: BoolProperty(name="Текущая модель")
-    reference_options: BoolProperty(name="Референс")
-    effect_options: BoolProperty(name="Огонь и свет")
-    export_options: BoolProperty(name="Сохранение и экспорт")
+    surface_options: BoolProperty(name="Настройки активного материала", update=section_changed("surface_options"))
+    addon_options: BoolProperty(name="Аддон", update=section_changed("addon_options"))
+    addon_models_options: BoolProperty(name="Модели аддона", default=True, update=section_changed("addon_models_options"))
+    setup_options: BoolProperty(name="Игра и пути", update=section_changed("setup_options"))
+    catalog_options: BoolProperty(name="Каталог", update=section_changed("catalog_options"))
+    model_options: BoolProperty(name="Текущая модель", update=section_changed("model_options"))
+    reference_options: BoolProperty(name="Референс", update=section_changed("reference_options"))
+    effect_options: BoolProperty(name="Огонь и свет", update=section_changed("effect_options"))
+    export_options: BoolProperty(name="Сохранение и экспорт", update=section_changed("export_options"))
     mod_filter: EnumProperty(name="Мод", items=lambda self, context: _mod_items, update=mod_filter_changed)
     mod_entries: CollectionProperty(type=RVModEntry)
     mod_index: IntProperty(update=mod_index_changed)
@@ -1911,17 +1922,6 @@ class RVPanel(bpy.types.Panel):
                     box.prop(surface, prop)
                 if surface.mode != "Object":
                     box.operator("rimvision.preview_material")
-        output = foldout(layout, settings, "export_options", "Сохранение и экспорт")
-        if output is not None:
-            if settings.addon_path:
-                output.label(text="Аддон: " + settings.addon_name)
-            else:
-                output.prop(settings, "output", text="Папка мода")
-            if settings.advanced or settings.graphic_filter or settings.height_offset:
-                output.prop(settings, "graphic_filter", text="Фильтр графики")
-                output.prop(settings, "height_offset", text="Смещение высоты")
-            output.prop(settings, "overwrite", text="Заменить существующий XML")
-            output.operator("rimvision.export_model", text="Сохранить модель в аддон" if settings.addon_path else "Экспортировать модель", icon="EXPORT")
         effects = foldout(layout, settings, "effect_options", "Огонь и свет")
         if effects is not None:
             row = effects.row(align=True)
@@ -1960,6 +1960,17 @@ class RVPanel(bpy.types.Panel):
             reference.prop(settings, "reference_offset", text="Смещение")
             reference.prop(settings, "reference_opacity", slider=True)
             reference.operator("rimvision.show_reference")
+        output = foldout(layout, settings, "export_options", "Сохранение и экспорт")
+        if output is not None:
+            if settings.addon_path:
+                output.label(text="Аддон: " + settings.addon_name)
+            else:
+                output.prop(settings, "output", text="Папка мода")
+            if settings.advanced or settings.graphic_filter or settings.height_offset:
+                output.prop(settings, "graphic_filter", text="Фильтр графики")
+                output.prop(settings, "height_offset", text="Смещение высоты")
+            output.prop(settings, "overwrite", text="Заменить существующий XML")
+            output.operator("rimvision.export_model", text="Сохранить модель в аддон" if settings.addon_path else "Экспортировать модель", icon="EXPORT")
 
 
 _classes = (RVEntry, RVAddonModel, RVFoundAddon, RVModEntry, RVEffectSettings, RVSettings, RVSurface, RV_UL_catalog, RV_UL_mod_filter, RVModFilterPanel, RV_UL_addon, RV_UL_found_addons, RVFindAddons, RVOpenFoundAddon, RVLoad, RVFind, RVPrepareSprites, RVReference,

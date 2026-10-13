@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "rimvision"
-version = "0.4.29"
+version = "0.4.30"
 name = "RimVision Model Tools"
 tagline = "Create and edit RimWorld 3D models in Blender"
 maintainer = "Papaya121"
